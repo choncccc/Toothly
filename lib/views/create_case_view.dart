@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:toothly/views/pdf_annotator_view.dart';
 
 class CreateCaseView extends StatefulWidget {
   const CreateCaseView({super.key});
@@ -14,6 +15,25 @@ class _CreateCaseViewState extends State<CreateCaseView> {
   String? selectedStatus;
 
   final List<String> items = ["Patient", "Simulation"];
+
+  static const _cdChartCompanions = [
+    'assets/pdf/CD CHART/CD 6 HOURS BOARD TYPE SCORE SHEET.pdf',
+    'assets/pdf/CD CHART/CD PATIENT SCORE SHEET.pdf',
+    'assets/pdf/CD CHART/CD SIMU EXERCISE SCORE SHEET.pdf',
+  ];
+
+  void _openCdChart(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const PdfAnnotatorView(
+          title: 'CD Patient Chart',
+          editablePdfPath: 'assets/pdf/CD CHART/PATIENT CHART.pdf',
+          companionPdfPaths: _cdChartCompanions,
+        ),
+      ),
+    );
+  }
 
   late final List<String> completeDentures;
   late final List<String> priorities;
@@ -66,7 +86,10 @@ class _CreateCaseViewState extends State<CreateCaseView> {
             _buildExpandableCard(
               title: selectedCD2 ?? "COMPLETE DENTURES",
               items: items,
-              onSelected: (val) => setState(() => selectedCD2 = val),
+              onSelected: (val) {
+                setState(() => selectedCD2 = val);
+                _openCdChart(context);
+              },
             ),
 
             const SizedBox(height: 12),

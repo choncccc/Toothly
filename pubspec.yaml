@@ -49,6 +49,9 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_dotenv: ^5.2.1
   connectivity_plus: ^7.0.0
+  pdfx: ^2.9.0
+  pdf: ^3.10.8
+  share_plus: ^10.0.0
 
 dev_dependencies:
   flutter_test:
@@ -78,6 +81,7 @@ flutter:
     - assets/img/user-square.svg
     - assets/img/name.svg
     - assets/img/calendar-week.svg
+    - "assets/pdf/CD CHART/"
 
   fonts:
     - family: Roboto
