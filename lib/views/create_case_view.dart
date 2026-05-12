@@ -75,14 +75,15 @@ class _CreateCaseViewState extends State<CreateCaseView> {
 
   final Map<int, String> _selected = {};
 
-  void _openPdf(BuildContext context, String label, String pdfPath) {
+  void _openPdf(BuildContext context, String label, String pdfPath,
+      List<String> companions) {
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => PdfAnnotatorView(
           title: label,
           editablePdfPath: pdfPath,
-          companionPdfPaths: const [],
+          companionPdfPaths: companions,
         ),
       ),
     );
@@ -122,7 +123,11 @@ class _CreateCaseViewState extends State<CreateCaseView> {
               items: card.items,
               onSelected: (item) {
                 setState(() => _selected[i] = item.label);
-                _openPdf(context, item.label, item.pdfPath);
+                final companions = card.items
+                    .where((it) => it.pdfPath != item.pdfPath)
+                    .map((it) => it.pdfPath)
+                    .toList();
+                _openPdf(context, item.label, item.pdfPath, companions);
               },
             );
           },

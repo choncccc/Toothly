@@ -41,7 +41,6 @@ class _HomeScreen extends StatelessWidget {
               tabs: const [
                 GButton(icon: Icons.home_outlined),
                 GButton(icon: Icons.add),
-                GButton(icon: Icons.draw),
                 GButton(icon: Icons.calendar_month),
               ],
               selectedIndex: controller.selectedIndex,

@@ -82,6 +82,19 @@ flutter:
     - assets/img/name.svg
     - assets/img/calendar-week.svg
     - "assets/pdf/CD CHART/"
+    - "assets/pdf/FPD CHART/"
+    - "assets/pdf/RPD CHART/"
+    - "assets/pdf/PERIO CHART/"
+    - "assets/pdf/PERIO CHART/PERIO (CHECK LIST)/"
+    - "assets/pdf/RESTO CHART/"
+    - "assets/pdf/RESTO CHART/RESTO (LIVE PX)/"
+    - "assets/pdf/RESTO CHART/RESTO (CHECK LIST)/"
+    - "assets/pdf/ENDO CHART/ENDO (SIMULATION)/"
+    - "assets/pdf/ENDO CHART/ENDO (LIVE PX)/"
+    - "assets/pdf/EXO CHART/EXO (LIVE PX)/"
+    - "assets/pdf/EXO CHART/EXO (CHECK LIST)/"
+    - "assets/pdf/PEDIA CHART/PEDIA (CHECK LIST)/"
+    - "assets/pdf/PEDIA CHART/PEDIA (LIVE PX)/"
 
   fonts:
     - family: Roboto

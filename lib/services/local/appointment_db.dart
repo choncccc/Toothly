@@ -8,6 +8,7 @@ class Appointment {
   final String title;
   final String? notes;
   final String? time;
+  final String? caseType;
 
   Appointment({
     this.id,
@@ -15,6 +16,7 @@ class Appointment {
     required this.title,
     this.notes,
     this.time,
+    this.caseType,
   });
 
   Appointment copyWith({
@@ -23,6 +25,7 @@ class Appointment {
     String? title,
     String? notes,
     String? time,
+    String? caseType,
   }) {
     return Appointment(
       id: id ?? this.id,
@@ -30,6 +33,7 @@ class Appointment {
       title: title ?? this.title,
       notes: notes ?? this.notes,
       time: time ?? this.time,
+      caseType: caseType ?? this.caseType,
     );
   }
 
@@ -43,6 +47,7 @@ class Appointment {
       'title': title,
       'notes': notes,
       'time': time,
+      'case_type': caseType,
     };
   }
 
@@ -53,6 +58,7 @@ class Appointment {
       title: map['title'] as String,
       notes: map['notes'] as String?,
       time: map['time'] as String?,
+      caseType: map['case_type'] as String?,
     );
   }
 }
@@ -73,9 +79,9 @@ class AppointmentsDb {
     final docsDir = await getApplicationDocumentsDirectory();
     final path = join(docsDir.path, 'appointments.db');
 
-    return openDatabase(
+    final db = await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE appointments (
@@ -83,11 +89,25 @@ class AppointmentsDb {
             date TEXT NOT NULL,
             title TEXT NOT NULL,
             notes TEXT,
-            time TEXT
+            time TEXT,
+            case_type TEXT
           )
         ''');
       },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute(
+              'ALTER TABLE appointments ADD COLUMN case_type TEXT');
+        }
+      },
     );
+
+    // Defensive: ensure case_type column exists for installs that skipped the migration
+    try {
+      await db.execute('ALTER TABLE appointments ADD COLUMN case_type TEXT');
+    } catch (_) {}
+
+    return db;
   }
 
   Future<List<Appointment>> getAppointmentsForDate(DateTime date) async {

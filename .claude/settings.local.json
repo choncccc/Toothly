@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter pub *)",
+      "Bash(xargs grep -l \"companionPdfPaths\\\\|skip.*pdf\\\\|filter.*pdf\\\\|exclude\")"
+    ]
+  }
+}

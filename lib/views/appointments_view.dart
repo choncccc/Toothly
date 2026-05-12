@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../viewmodel/appointments_viewmodel.dart';
-import '../services/local/appointment_db.dart'; // adjust path if needed
+import '../services/local/appointment_db.dart';
+import '../services/remote/supabase_service.dart';
 
 class AppointmentsView extends StatefulWidget {
   const AppointmentsView({super.key});
@@ -250,6 +251,17 @@ class _AppointmentsViewState extends State<AppointmentsView> {
     _showAppointmentsBottomSheet(date, appointments);
   }
 
+  static const _caseTypes = [
+    'PEDIATRIC',
+    'COMPLETE DENTURES',
+    'ENDODONTICS',
+    'EXODONTIA',
+    'FIXED PARTIAL DENTURE',
+    'REMOVABLE PARTIAL DENTURE',
+    'RESTORATIVE',
+    'PERIODONTICS',
+  ];
+
   void _showAppointmentsBottomSheet(
     DateTime date,
     List<Appointment> initialAppointments,
@@ -257,6 +269,7 @@ class _AppointmentsViewState extends State<AppointmentsView> {
     final titleController = TextEditingController();
     final notesController = TextEditingController();
     TimeOfDay? selectedTime;
+    String? selectedCaseType;
     List<Appointment> appointments = List.of(initialAppointments);
 
     showModalBottomSheet(
@@ -300,20 +313,38 @@ class _AppointmentsViewState extends State<AppointmentsView> {
                   time: selectedTime != null
                       ? selectedTime!.format(context)
                       : null,
+                  caseType: selectedCaseType,
                 );
 
                 final id = await _db.insertAppointment(appt);
                 final saved = appt.copyWith(id: id);
+                SupabaseService.instance.insertAppointment(appt).ignore();
 
                 setModalState(() {
                   appointments.add(saved);
                   titleController.clear();
                   notesController.clear();
                   selectedTime = null;
+                  selectedCaseType = null;
                 });
 
                 if (mounted) {
                   context.read<AppointmentsViewModel>().loadUpcoming();
+                  if (_isToday(date)) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: const Text(
+                          'Reminder: You have an appointment today!',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                        backgroundColor: const Color(0xFF5D4B8A),
+                        behavior: SnackBarBehavior.floating,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    );
+                  }
                 }
               }
 
@@ -358,17 +389,17 @@ class _AppointmentsViewState extends State<AppointmentsView> {
                         itemCount: appointments.length,
                         itemBuilder: (context, index) {
                           final appt = appointments[index];
+                          final subParts = [
+                            if (appt.caseType != null) appt.caseType!,
+                            if (appt.time != null) appt.time!,
+                            if (appt.notes != null) appt.notes!,
+                          ];
                           return ListTile(
                             contentPadding: EdgeInsets.zero,
                             title: Text(appt.title),
-                            subtitle: (appt.time != null || appt.notes != null)
-                                ? Text(
-                                    [
-                                      if (appt.time != null) appt.time!,
-                                      if (appt.notes != null) appt.notes!,
-                                    ].join(' • '),
-                                  )
-                                : null,
+                            subtitle: subParts.isEmpty
+                                ? null
+                                : Text(subParts.join(' • ')),
                           );
                         },
                       ),
@@ -378,6 +409,20 @@ class _AppointmentsViewState extends State<AppointmentsView> {
                       decoration: const InputDecoration(
                         labelText: 'Patient Name',
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      value: selectedCaseType,
+                      decoration: const InputDecoration(labelText: 'Case Type'),
+                      hint: const Text('Select a case'),
+                      items: _caseTypes
+                          .map((c) => DropdownMenuItem(
+                                value: c,
+                                child: Text(c),
+                              ))
+                          .toList(),
+                      onChanged: (val) =>
+                          setModalState(() => selectedCaseType = val),
                     ),
                     const SizedBox(height: 8),
                     TextField(

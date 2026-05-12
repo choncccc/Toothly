@@ -15,7 +15,6 @@ class HomeViewmodel extends ChangeNotifier {
   List<Widget> pages = const [
     const TaskDashboardPage(),
     const CreateCaseView(),
-    Center(child: Text("Draw Page - Coming Soon!")),
     const AppointmentsView(),
   ];
 
