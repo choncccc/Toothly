@@ -11,6 +11,8 @@ import 'views/create_case_view.dart';
 
 import 'viewmodel/home_viewmodel.dart';
 import 'viewmodel/appointments_viewmodel.dart';
+import 'services/notification_service.dart';
+import 'services/remote/supabase_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,6 +26,16 @@ Future<void> main() async {
   }
 
   await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
+  await NotificationService.instance.init();
+
+  // Schedule reminders for existing appointments if already logged in
+  if (Supabase.instance.client.auth.currentSession != null) {
+    try {
+      final appointments =
+          await SupabaseService.instance.fetchUpcomingAppointments();
+      await NotificationService.instance.scheduleAll(appointments);
+    } catch (_) {}
+  }
 
   runApp(const MyApp());
 }

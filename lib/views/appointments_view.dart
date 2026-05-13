@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../viewmodel/appointments_viewmodel.dart';
 import '../services/local/appointment_db.dart';
 import '../services/remote/supabase_service.dart';
+import '../services/notification_service.dart';
 
 class AppointmentsView extends StatefulWidget {
   const AppointmentsView({super.key});
@@ -319,6 +320,7 @@ class _AppointmentsViewState extends State<AppointmentsView> {
                 final id = await _db.insertAppointment(appt);
                 final saved = appt.copyWith(id: id);
                 SupabaseService.instance.insertAppointment(appt).ignore();
+                NotificationService.instance.scheduleReminder(saved).ignore();
 
                 setModalState(() {
                   appointments.add(saved);

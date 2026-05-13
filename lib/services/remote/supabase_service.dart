@@ -20,4 +20,20 @@ class SupabaseService {
       'case_type': appt.caseType,
     });
   }
+
+  Future<List<Appointment>> fetchUpcomingAppointments() async {
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) return [];
+
+    final today = Appointment.dateKey(DateTime.now());
+
+    final result = await _client
+        .from('appointments')
+        .select()
+        .eq('user_id', userId)
+        .gte('date', today)
+        .order('date');
+
+    return (result as List).map((e) => Appointment.fromMap(e)).toList();
+  }
 }
