@@ -111,9 +111,9 @@ class TaskDashboardPage extends StatelessWidget {
 
                       const SizedBox(height: 4),
 
-                      const Text(
-                        "10",
-                        style: TextStyle(
+                      Text(
+                        controller.casesCompleted.toString(),
+                        style: const TextStyle(
                           color: Colors.white,
                           fontFamily: "Derrick",
                           fontSize: 36,

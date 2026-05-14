@@ -10,6 +10,7 @@ class HomeViewmodel extends ChangeNotifier {
 
   String user_type = '';
   String fName = 'Guest';
+  int casesCompleted = 0;
   int selectedIndex = 0;
 
   List<Widget> pages = const [
@@ -21,6 +22,8 @@ class HomeViewmodel extends ChangeNotifier {
   HomeViewmodel() {
     _loadUserData();
   }
+
+  Future<void> refresh() => _loadUserData();
 
   Future<void> _loadUserData() async {
     final user = supabase.auth.currentUser;
@@ -34,23 +37,25 @@ class HomeViewmodel extends ChangeNotifier {
 
     final response = await supabase
         .from('profiles')
-        .select('first_name, user_type')
+        .select('first_name, user_type, cases_completed')
         .eq('id', user.id)
         .maybeSingle();
 
     if (response != null) {
       fName = response['first_name'] ?? user.email ?? 'Guest';
 
-      // User type prefix
       final type = response['user_type'];
       user_type = type == 'teacher'
           ? 'Prof.'
           : type == 'student'
           ? 'Dentist'
           : '';
+
+      casesCompleted = (response['cases_completed'] as int?) ?? 0;
     } else {
       fName = user.userMetadata?['first_name'] ?? user.email ?? 'Guest';
       user_type = '';
+      casesCompleted = 0;
     }
 
     notifyListeners();

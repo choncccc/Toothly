@@ -39,18 +39,21 @@ class AuthRepository {
       if (response.user == null) {
         throw Exception("Registration failed. Try again.");
       }
-
-      await _supabase.auth.refreshSession();
-
-      await _supabase.from('profiles').insert({
+      final profileData = {
         'id': response.user!.id,
         'first_name': firstName,
         'last_name': lastName,
         'email': email,
         'user_type': userType,
-        'year_level': year,
         'created_at': DateTime.now().toIso8601String(),
-      });
+      };
+      if (year.trim().isNotEmpty) {
+        profileData['year'] = year;
+      }
+
+      await _supabase.from('profiles').insert(profileData);
+
+      await _supabase.auth.signOut();
     } on AuthException catch (e) {
       throw Exception(e.message);
     } catch (e) {

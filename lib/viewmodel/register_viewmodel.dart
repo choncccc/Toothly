@@ -44,6 +44,11 @@ class RegisterViewModel {
       return false;
     }
 
+    if (userType == "student" && year.trim().isEmpty) {
+      errorMessage = "Please select your year level";
+      return false;
+    }
+
     try {
       isLoading = true;
       await _authRepository.register(
