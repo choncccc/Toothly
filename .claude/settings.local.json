@@ -4,7 +4,9 @@
       "Bash(flutter pub *)",
       "Bash(xargs grep -l \"companionPdfPaths\\\\|skip.*pdf\\\\|filter.*pdf\\\\|exclude\")",
       "Bash(dart run *)",
-      "Bash(flutter analyze *)"
+      "Bash(flutter analyze *)",
+      "PowerShell(flutter pub *)",
+      "PowerShell(flutter analyze *)"
     ]
   }
 }
