@@ -140,6 +140,18 @@ class AppointmentsDb {
     return result.map((e) => Appointment.fromMap(e)).toList();
   }
 
+  Future<List<Appointment>> getAppointmentsInRange(
+      DateTime start, DateTime end) async {
+    final db = await database;
+    final result = await db.query(
+      'appointments',
+      where: 'date >= ? AND date <= ?',
+      whereArgs: [Appointment.dateKey(start), Appointment.dateKey(end)],
+      orderBy: 'date ASC, time ASC, id ASC',
+    );
+    return result.map((e) => Appointment.fromMap(e)).toList();
+  }
+
   Future<int> insertAppointment(Appointment appt) async {
     final db = await database;
     return db.insert('appointments', appt.toMap());

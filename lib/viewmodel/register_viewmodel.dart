@@ -13,7 +13,7 @@ class RegisterViewModel {
     required String lastName,
     required String email,
     required String password,
-    required String year,
+    required String clinicLevel,
   }) async {
     final fName = firstName.trim();
     final lName = lastName.trim();
@@ -44,8 +44,8 @@ class RegisterViewModel {
       return false;
     }
 
-    if (userType == "student" && year.trim().isEmpty) {
-      errorMessage = "Please select your year level";
+    if (userType == "student" && clinicLevel.trim().isEmpty) {
+      errorMessage = "Please select your clinic level";
       return false;
     }
 
@@ -57,7 +57,7 @@ class RegisterViewModel {
         email: mail,
         password: pass,
         userType: userType,
-        year: year,
+        clinicLevel: clinicLevel,
       );
       isLoading = false;
       return true;

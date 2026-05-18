@@ -1,9 +1,30 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../viewmodel/appointments_viewmodel.dart';
+import 'package:table_calendar/table_calendar.dart';
+
 import '../services/local/appointment_db.dart';
-import '../services/remote/supabase_service.dart';
 import '../services/notification_service.dart';
+import '../services/remote/supabase_service.dart';
+import '../viewmodel/appointments_viewmodel.dart';
+
+// Palette ---------------------------------------------------------------------
+const _bgColor = Color(0xFFF8F9FF);
+const _primary = Color(0xFF5D4B8A);
+const _purpleLight = Color(0xFFB191FF);
+const _purpleDeep = Color(0xFF8F6BFF);
+const _gold = Color(0xFFf7e4b0);
+const _border = Color(0xFFE6E1F5);
+
+const _caseTypes = [
+  'PEDIATRIC',
+  'COMPLETE DENTURES',
+  'ENDODONTICS',
+  'EXODONTIA',
+  'FIXED PARTIAL DENTURE',
+  'REMOVABLE PARTIAL DENTURE',
+  'RESTORATIVE',
+  'PERIODONTICS',
+];
 
 class AppointmentsView extends StatefulWidget {
   const AppointmentsView({super.key});
@@ -13,516 +34,836 @@ class AppointmentsView extends StatefulWidget {
 }
 
 class _AppointmentsViewState extends State<AppointmentsView> {
-  late PageController _pageController;
-  late DateTime _currentDate;
-  DateTime? _selectedDate;
+  final _db = AppointmentsDb.instance;
 
-  final AppointmentsDb _db = AppointmentsDb.instance;
+  DateTime _focusedDay = DateTime.now();
+  DateTime _selectedDay = DateTime.now();
+  Map<DateTime, List<Appointment>> _eventsByDay = {};
+  List<Appointment> _selectedDayAppointments = [];
+  bool _loading = true;
 
   @override
   void initState() {
     super.initState();
-    _currentDate = DateTime.now();
-    _pageController = PageController(initialPage: 1000);
+    _selectedDay = _dayOnly(_focusedDay);
+    _loadMonth(_focusedDay);
   }
 
-  @override
-  void dispose() {
-    _pageController.dispose();
-    super.dispose();
+  DateTime _dayOnly(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  Future<void> _loadMonth(DateTime month) async {
+    setState(() => _loading = true);
+    final start = DateTime(month.year, month.month - 1, 1);
+    final end = DateTime(month.year, month.month + 2, 0);
+    final all = await _db.getAppointmentsInRange(start, end);
+    final map = <DateTime, List<Appointment>>{};
+    for (final a in all) {
+      final key = _dayOnly(a.date);
+      map.putIfAbsent(key, () => []).add(a);
+    }
+    if (!mounted) return;
+    setState(() {
+      _eventsByDay = map;
+      _selectedDayAppointments = map[_dayOnly(_selectedDay)] ?? [];
+      _loading = false;
+    });
   }
 
-  DateTime _getMonthForPage(int page) {
-    final monthOffset = (page - 1000) * 2;
-    return DateTime(_currentDate.year, _currentDate.month + monthOffset, 1);
+  List<Appointment> _eventsFor(DateTime day) =>
+      _eventsByDay[_dayOnly(day)] ?? const [];
+
+  Future<void> _selectDay(DateTime selected, DateTime focused) async {
+    setState(() {
+      _selectedDay = _dayOnly(selected);
+      _focusedDay = focused;
+      _selectedDayAppointments = _eventsFor(_selectedDay);
+    });
+  }
+
+  Future<void> _onPageChanged(DateTime focused) async {
+    _focusedDay = focused;
+    await _loadMonth(focused);
+  }
+
+  void _jumpToday() {
+    final today = DateTime.now();
+    setState(() {
+      _focusedDay = today;
+      _selectedDay = _dayOnly(today);
+      _selectedDayAppointments = _eventsFor(_selectedDay);
+    });
+  }
+
+  Future<void> _openAddSheet() async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _bgColor,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (_) => _AddAppointmentSheet(date: _selectedDay),
+    );
+    if (mounted) {
+      await _loadMonth(_focusedDay);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FF),
+      backgroundColor: _bgColor,
       appBar: AppBar(
-        backgroundColor: const Color(0xFFF8F9FF),
+        backgroundColor: _bgColor,
+        elevation: 0,
         surfaceTintColor: Colors.transparent,
         automaticallyImplyLeading: false,
-        title: Row(
-          children: [
-            const SizedBox(width: 10),
-            Text(
-              "Appointments",
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                fontFamily: 'Derrick',
-                letterSpacing: 1.1,
-                color: Color(0xFF5D4B8A),
+        toolbarHeight: 64,
+        title: const Text(
+          'Schedule',
+          style: TextStyle(
+            color: _primary,
+            fontFamily: 'Derrick',
+            fontSize: 22,
+            letterSpacing: 1.4,
+          ),
+        ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: TextButton.icon(
+              onPressed: _jumpToday,
+              icon: const Icon(Icons.today_rounded, size: 18, color: _primary),
+              label: const Text(
+                'Today',
+                style: TextStyle(
+                  color: _primary,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
+          ),
+        ],
+      ),
+      body: RefreshIndicator(
+        color: _primary,
+        onRefresh: () => _loadMonth(_focusedDay),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            _CalendarCard(
+              focusedDay: _focusedDay,
+              selectedDay: _selectedDay,
+              eventsFor: _eventsFor,
+              onDaySelected: _selectDay,
+              onPageChanged: _onPageChanged,
+            ),
+            const SizedBox(height: 18),
+            _DayHeader(date: _selectedDay,
+                count: _selectedDayAppointments.length),
+            const SizedBox(height: 10),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 32),
+                child: Center(
+                  child: CircularProgressIndicator(color: _primary),
+                ),
+              )
+            else if (_selectedDayAppointments.isEmpty)
+              const _EmptyDayCard()
+            else
+              for (final a in _selectedDayAppointments)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _AppointmentRow(appt: a),
+                ),
+            const SizedBox(height: 16),
+            _AddButton(onPressed: _openAddSheet),
           ],
         ),
       ),
-      body: PageView.builder(
-        controller: _pageController,
-        scrollDirection: Axis.vertical,
-        itemBuilder: (context, index) {
-          final startMonth = _getMonthForPage(index);
-          final nextMonth = DateTime(startMonth.year, startMonth.month + 1, 1);
+    );
+  }
+}
 
-          return LayoutBuilder(
-            builder: (context, constraints) {
-              final halfHeight = constraints.maxHeight / 2;
+// =============================================================================
+// Calendar card
+// =============================================================================
+class _CalendarCard extends StatelessWidget {
+  final DateTime focusedDay;
+  final DateTime selectedDay;
+  final List<Appointment> Function(DateTime) eventsFor;
+  final void Function(DateTime selected, DateTime focused) onDaySelected;
+  final ValueChanged<DateTime> onPageChanged;
 
-              return Column(
-                children: [
-                  SizedBox(
-                    height: halfHeight,
-                    child: _buildMonthCalendar(startMonth),
-                  ),
-                  const Divider(height: 1, thickness: 1),
-                  SizedBox(
-                    height: halfHeight - 1,
-                    child: _buildMonthCalendar(nextMonth),
-                  ),
-                ],
-              );
-            },
-          );
-        },
+  const _CalendarCard({
+    required this.focusedDay,
+    required this.selectedDay,
+    required this.eventsFor,
+    required this.onDaySelected,
+    required this.onPageChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(8, 12, 8, 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _border),
+        boxShadow: [
+          BoxShadow(
+            color: _purpleDeep.withValues(alpha: 0.05),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: TableCalendar<Appointment>(
+        firstDay: DateTime.utc(2020, 1, 1),
+        lastDay: DateTime.utc(2035, 12, 31),
+        focusedDay: focusedDay,
+        selectedDayPredicate: (d) => isSameDay(d, selectedDay),
+        eventLoader: eventsFor,
+        startingDayOfWeek: StartingDayOfWeek.sunday,
+        availableGestures: AvailableGestures.horizontalSwipe,
+        availableCalendarFormats: const {CalendarFormat.month: 'Month'},
+        onDaySelected: onDaySelected,
+        onPageChanged: onPageChanged,
+        rowHeight: 44,
+        daysOfWeekHeight: 28,
+        headerStyle: const HeaderStyle(
+          titleCentered: true,
+          formatButtonVisible: false,
+          titleTextStyle: TextStyle(
+            color: _primary,
+            fontFamily: 'Derrick',
+            fontSize: 18,
+            letterSpacing: 0.6,
+          ),
+          leftChevronIcon:
+              Icon(Icons.chevron_left_rounded, color: _primary, size: 28),
+          rightChevronIcon:
+              Icon(Icons.chevron_right_rounded, color: _primary, size: 28),
+          headerPadding: EdgeInsets.symmetric(vertical: 8),
+        ),
+        daysOfWeekStyle: const DaysOfWeekStyle(
+          weekdayStyle: TextStyle(
+            color: _primary,
+            fontWeight: FontWeight.w600,
+            fontSize: 12,
+          ),
+          weekendStyle: TextStyle(
+            color: _primary,
+            fontWeight: FontWeight.w600,
+            fontSize: 12,
+          ),
+        ),
+        calendarStyle: CalendarStyle(
+          outsideDaysVisible: false,
+          cellMargin: const EdgeInsets.all(4),
+          defaultTextStyle: const TextStyle(color: _primary),
+          weekendTextStyle: const TextStyle(color: _primary),
+          todayDecoration: BoxDecoration(
+            color: _border,
+            shape: BoxShape.circle,
+          ),
+          todayTextStyle: const TextStyle(
+            color: _primary,
+            fontWeight: FontWeight.bold,
+          ),
+          selectedDecoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [_purpleLight, _purpleDeep],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            shape: BoxShape.circle,
+          ),
+          selectedTextStyle: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+          markerDecoration: const BoxDecoration(
+            color: _gold,
+            shape: BoxShape.circle,
+          ),
+          markersAlignment: Alignment.bottomCenter,
+          markerSize: 5,
+          markersOffset: const PositionedOffset(bottom: 4),
+        ),
       ),
     );
   }
+}
 
-  Widget _buildMonthCalendar(DateTime month) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final daysInMonth = DateTime(month.year, month.month + 1, 0).day;
-        final firstDayOfMonth = DateTime(month.year, month.month, 1);
-        final startingWeekday = firstDayOfMonth.weekday % 7;
+// =============================================================================
+// Day header + supporting widgets
+// =============================================================================
+class _DayHeader extends StatelessWidget {
+  final DateTime date;
+  final int count;
+  const _DayHeader({required this.date, required this.count});
 
-        // Total cells in the grid (empty + days)
-        final totalCells = startingWeekday + daysInMonth;
-        final weekCount = (totalCells + 6) ~/ 7; // ceil(totalCells / 7)
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Expanded(
+          child: Text(
+            _formatLong(date),
+            style: const TextStyle(
+              color: _primary,
+              fontFamily: 'Derrick',
+              fontSize: 18,
+              letterSpacing: 0.4,
+            ),
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: _border,
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Text(
+            '$count appt${count == 1 ? "" : "s"}',
+            style: const TextStyle(
+              color: _primary,
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
-        const headerHeight = 56.0;
-        const weekdayRowHeight = 24.0;
-        const spacing = 24.0;
+  static String _formatLong(DateTime d) {
+    const months = [
+      'January','February','March','April','May','June',
+      'July','August','September','October','November','December',
+    ];
+    const weekdays = [
+      'Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday',
+    ];
+    return '${weekdays[d.weekday - 1]}, ${months[d.month - 1]} ${d.day}';
+  }
+}
 
-        final remainingHeight =
-            constraints.maxHeight - headerHeight - weekdayRowHeight - spacing;
+class _EmptyDayCard extends StatelessWidget {
+  const _EmptyDayCard();
 
-        final rowHeight = remainingHeight > 0
-            ? remainingHeight / weekCount
-            : 0.0;
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: _border,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(Icons.event_available_rounded,
+                color: _primary, size: 26),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Nothing scheduled',
+            style: TextStyle(
+              color: _primary,
+              fontFamily: 'Derrick',
+              fontSize: 16,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Tap “Add appointment” to book one.',
+            style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
-        return Container(
-          color: const Color(0xFFF8F9FF),
-          child: Column(
-            children: [
-              const SizedBox(height: 8),
-              Text(
-                _getMonthYearString(month),
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                  fontFamily: 'Derrick',
-                  color: Color(0xFF5D4B8A),
-                ),
+class _AppointmentRow extends StatelessWidget {
+  final Appointment appt;
+  const _AppointmentRow({required this.appt});
+
+  @override
+  Widget build(BuildContext context) {
+    final hasTime = appt.time != null && appt.time!.isNotEmpty;
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [_purpleLight, _purpleDeep],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
               ),
-              const SizedBox(height: 8),
+              borderRadius: BorderRadius.circular(13),
+            ),
+            child: const Icon(Icons.person_rounded,
+                color: Colors.white, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  appt.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: _primary,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                  ),
+                ),
+                if (appt.caseType != null && appt.caseType!.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    appt.caseType!,
+                    style: TextStyle(
+                      color: Colors.grey.shade700,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+                if (appt.notes != null && appt.notes!.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    appt.notes!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.grey.shade600,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+                if (hasTime) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      const Icon(Icons.schedule_rounded,
+                          size: 13, color: _primary),
+                      const SizedBox(width: 4),
+                      Text(
+                        appt.time!,
+                        style: const TextStyle(
+                          color: _primary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
-              // Weekday Headers
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                child: SizedBox(
-                  height: weekdayRowHeight,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
-                    children: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-                        .map(
-                          (day) => Expanded(
-                            child: Text(
-                              day,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                fontFamily: 'Derrick',
-                                color: Color(0xFF5D4B8A),
-                              ),
-                            ),
-                          ),
-                        )
-                        .toList(),
+class _AddButton extends StatelessWidget {
+  final VoidCallback onPressed;
+  const _AddButton({required this.onPressed});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: _purpleDeep.withValues(alpha: 0.25),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: ElevatedButton.icon(
+          onPressed: onPressed,
+          icon: const Icon(Icons.add_rounded, color: Colors.white),
+          label: const Text(
+            'Add appointment',
+            style: TextStyle(
+              fontFamily: 'Derrick',
+              fontSize: 16,
+              color: Colors.white,
+              letterSpacing: 0.5,
+            ),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: _purpleDeep,
+            elevation: 0,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: _gold, width: 1.5),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Add appointment sheet
+// =============================================================================
+class _AddAppointmentSheet extends StatefulWidget {
+  final DateTime date;
+  const _AddAppointmentSheet({required this.date});
+
+  @override
+  State<_AddAppointmentSheet> createState() => _AddAppointmentSheetState();
+}
+
+class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
+  final _titleCtl = TextEditingController();
+  final _notesCtl = TextEditingController();
+  TimeOfDay? _time;
+  String? _caseType;
+  bool _saving = false;
+
+  final _db = AppointmentsDb.instance;
+
+  @override
+  void dispose() {
+    _titleCtl.dispose();
+    _notesCtl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _time ?? TimeOfDay.now(),
+      builder: (ctx, child) => Theme(
+        data: Theme.of(ctx).copyWith(
+          colorScheme: const ColorScheme.light(
+            primary: _purpleDeep,
+            onPrimary: Colors.white,
+            surface: Colors.white,
+            onSurface: _primary,
+          ),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null) setState(() => _time = picked);
+  }
+
+  Future<void> _save() async {
+    final title = _titleCtl.text.trim();
+    if (title.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Patient name is required')),
+      );
+      return;
+    }
+    setState(() => _saving = true);
+    final appt = Appointment(
+      date: widget.date,
+      title: title,
+      notes: _notesCtl.text.trim().isEmpty ? null : _notesCtl.text.trim(),
+      time: _time?.format(context),
+      caseType: _caseType,
+    );
+    final id = await _db.insertAppointment(appt);
+    final saved = appt.copyWith(id: id);
+    SupabaseService.instance.insertAppointment(appt).ignore();
+    NotificationService.instance.scheduleReminder(saved).ignore();
+    if (!mounted) return;
+    context.read<AppointmentsViewModel>().loadUpcoming();
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom,
+      ),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+        decoration: const BoxDecoration(
+          color: _bgColor,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: _border,
+                    borderRadius: BorderRadius.circular(2),
                   ),
                 ),
               ),
-
-              const SizedBox(height: 8),
-
-              // Calendar Grid (dynamic rowHeight)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                child: _buildCalendarGrid(
-                  month,
-                  daysInMonth,
-                  startingWeekday,
-                  rowHeight,
+              const SizedBox(height: 16),
+              const Text(
+                'New appointment',
+                style: TextStyle(
+                  color: _primary,
+                  fontFamily: 'Derrick',
+                  fontSize: 20,
+                  letterSpacing: 0.6,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _formatLong(widget.date),
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+              ),
+              const SizedBox(height: 20),
+              _FieldLabel('Patient name'),
+              _RoundedField(
+                controller: _titleCtl,
+                hint: 'e.g. Juan Dela Cruz',
+              ),
+              const SizedBox(height: 14),
+              _FieldLabel('Case type'),
+              _CaseTypeDropdown(
+                value: _caseType,
+                onChanged: (v) => setState(() => _caseType = v),
+              ),
+              const SizedBox(height: 14),
+              _FieldLabel('Notes'),
+              _RoundedField(
+                controller: _notesCtl,
+                hint: 'Anything to remember…',
+                maxLines: 3,
+              ),
+              const SizedBox(height: 14),
+              _FieldLabel('Time'),
+              _TimePickerRow(
+                time: _time,
+                onPick: _pickTime,
+              ),
+              const SizedBox(height: 22),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _saving ? null : _save,
+                  icon: _saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Icon(Icons.check_rounded, color: Colors.white),
+                  label: const Text(
+                    'Save appointment',
+                    style: TextStyle(
+                      fontFamily: 'Derrick',
+                      fontSize: 16,
+                      color: Colors.white,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _purpleDeep,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      side: const BorderSide(color: _gold, width: 1.5),
+                    ),
+                  ),
                 ),
               ),
             ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
-  Widget _buildCalendarGrid(
-    DateTime month,
-    int daysInMonth,
-    int startingWeekday,
-    double rowHeight,
-  ) {
-    List<Widget> dayWidgets = [];
+  static String _formatLong(DateTime d) {
+    const months = [
+      'January','February','March','April','May','June',
+      'July','August','September','October','November','December',
+    ];
+    const weekdays = [
+      'Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday',
+    ];
+    return '${weekdays[d.weekday - 1]}, ${months[d.month - 1]} ${d.day}, ${d.year}';
+  }
+}
 
-    for (int i = 0; i < startingWeekday; i++) {
-      dayWidgets.add(const Expanded(child: SizedBox()));
-    }
+class _FieldLabel extends StatelessWidget {
+  final String text;
+  const _FieldLabel(this.text);
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(left: 6, bottom: 6),
+        child: Text(
+          text,
+          style: const TextStyle(
+            color: _primary,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+}
 
-    for (int day = 1; day <= daysInMonth; day++) {
-      final date = DateTime(month.year, month.month, day);
-      final isToday = _isToday(date);
-      final isSelected =
-          _selectedDate != null && _isSameDay(date, _selectedDate!);
+class _RoundedField extends StatelessWidget {
+  final TextEditingController controller;
+  final String hint;
+  final int maxLines;
+  const _RoundedField({
+    required this.controller,
+    required this.hint,
+    this.maxLines = 1,
+  });
 
-      dayWidgets.add(
-        Expanded(
-          child: GestureDetector(
-            onTap: () => _onDateSelected(date),
-            child: Container(
-              margin: const EdgeInsets.all(4),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: isSelected
-                    ? const Color(0xFF5D4B8A)
-                    : isToday
-                    ? const Color(0xFF5D4B8A).withOpacity(0.2)
-                    : Colors.transparent,
-                shape: BoxShape.circle,
-              ),
-              child: Text(
-                '$day',
-                style: TextStyle(
-                  color: isSelected
-                      ? const Color(0xFFD4AF37)
-                      : isToday
-                      ? const Color(0xFF5D4B8A)
-                      : Colors.black,
-                  fontWeight: isToday ? FontWeight.bold : FontWeight.normal,
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      maxLines: maxLines,
+      cursorColor: _primary,
+      style: const TextStyle(color: _primary),
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: TextStyle(color: Colors.grey.shade500),
+        filled: true,
+        fillColor: Colors.white,
+        contentPadding:
+            const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: _border),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: _border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: _purpleDeep, width: 1.5),
+        ),
+      ),
+    );
+  }
+}
+
+class _CaseTypeDropdown extends StatelessWidget {
+  final String? value;
+  final ValueChanged<String?> onChanged;
+  const _CaseTypeDropdown({required this.value, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _border),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: value,
+          isExpanded: true,
+          hint: Text(
+            'Select case type',
+            style: TextStyle(color: Colors.grey.shade500),
+          ),
+          icon: const Icon(Icons.keyboard_arrow_down_rounded,
+              color: _primary),
+          style: const TextStyle(color: _primary, fontSize: 14),
+          dropdownColor: Colors.white,
+          items: _caseTypes
+              .map(
+                (c) => DropdownMenuItem(
+                  value: c,
+                  child: Text(c),
                 ),
+              )
+              .toList(),
+          onChanged: onChanged,
+        ),
+      ),
+    );
+  }
+}
+
+class _TimePickerRow extends StatelessWidget {
+  final TimeOfDay? time;
+  final VoidCallback onPick;
+  const _TimePickerRow({required this.time, required this.onPick});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _border),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.schedule_rounded, color: _primary, size: 18),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              time != null ? time!.format(context) : 'Not set',
+              style: const TextStyle(
+                color: _primary,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
-        ),
-      );
-    }
-
-    while (dayWidgets.length % 7 != 0) {
-      dayWidgets.add(const Expanded(child: SizedBox()));
-    }
-
-    List<Widget> rows = [];
-    for (int i = 0; i < dayWidgets.length; i += 7) {
-      rows.add(
-        SizedBox(
-          height: rowHeight,
-          child: Row(children: dayWidgets.sublist(i, i + 7)),
-        ),
-      );
-    }
-
-    return Column(children: rows);
-  }
-
-  Future<void> _onDateSelected(DateTime date) async {
-    setState(() {
-      _selectedDate = date;
-    });
-
-    final appointments = await _db.getAppointmentsForDate(date);
-    if (!mounted) return;
-
-    _showAppointmentsBottomSheet(date, appointments);
-  }
-
-  static const _caseTypes = [
-    'PEDIATRIC',
-    'COMPLETE DENTURES',
-    'ENDODONTICS',
-    'EXODONTIA',
-    'FIXED PARTIAL DENTURE',
-    'REMOVABLE PARTIAL DENTURE',
-    'RESTORATIVE',
-    'PERIODONTICS',
-  ];
-
-  void _showAppointmentsBottomSheet(
-    DateTime date,
-    List<Appointment> initialAppointments,
-  ) {
-    final titleController = TextEditingController();
-    final notesController = TextEditingController();
-    TimeOfDay? selectedTime;
-    String? selectedCaseType;
-    List<Appointment> appointments = List.of(initialAppointments);
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          TextButton(
+            onPressed: onPick,
+            style: TextButton.styleFrom(
+              foregroundColor: _purpleDeep,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+            child: Text(time != null ? 'Change' : 'Pick'),
+          ),
+        ],
       ),
-      builder: (context) {
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).viewInsets.bottom,
-            left: 16,
-            right: 16,
-            top: 16,
-          ),
-          child: StatefulBuilder(
-            builder: (context, setModalState) {
-              Future<void> pickTime() async {
-                final picked = await showTimePicker(
-                  context: context,
-                  initialTime: selectedTime ?? TimeOfDay.now(),
-                );
-                if (picked != null) {
-                  setModalState(() {
-                    selectedTime = picked;
-                  });
-                }
-              }
-
-              Future<void> saveAppointment() async {
-                final title = titleController.text.trim();
-                final notes = notesController.text.trim();
-
-                if (title.isEmpty) return;
-
-                final appt = Appointment(
-                  date: date,
-                  title: title,
-                  notes: notes.isEmpty ? null : notes,
-                  time: selectedTime != null
-                      ? selectedTime!.format(context)
-                      : null,
-                  caseType: selectedCaseType,
-                );
-
-                final id = await _db.insertAppointment(appt);
-                final saved = appt.copyWith(id: id);
-                SupabaseService.instance.insertAppointment(appt).ignore();
-                NotificationService.instance.scheduleReminder(saved).ignore();
-
-                setModalState(() {
-                  appointments.add(saved);
-                  titleController.clear();
-                  notesController.clear();
-                  selectedTime = null;
-                  selectedCaseType = null;
-                });
-
-                if (mounted) {
-                  context.read<AppointmentsViewModel>().loadUpcoming();
-                  if (_isToday(date)) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: const Text(
-                          'Reminder: You have an appointment today!',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                        backgroundColor: const Color(0xFF5D4B8A),
-                        behavior: SnackBarBehavior.floating,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                    );
-                  }
-                }
-              }
-
-              return SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 40,
-                        height: 4,
-                        margin: const EdgeInsets.only(bottom: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade300,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                    ),
-                    Text(
-                      'Appointments for ${_formatFullDate(date)}',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontFamily: 'Derrick',
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF5D4B8A),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    if (appointments.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 8.0),
-                        child: Text(
-                          'No appointments yet.',
-                          style: TextStyle(color: Colors.grey),
-                        ),
-                      )
-                    else
-                      ListView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: appointments.length,
-                        itemBuilder: (context, index) {
-                          final appt = appointments[index];
-                          final subParts = [
-                            if (appt.caseType != null) appt.caseType!,
-                            if (appt.time != null) appt.time!,
-                            if (appt.notes != null) appt.notes!,
-                          ];
-                          return ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(appt.title),
-                            subtitle: subParts.isEmpty
-                                ? null
-                                : Text(subParts.join(' • ')),
-                          );
-                        },
-                      ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: titleController,
-                      decoration: const InputDecoration(
-                        labelText: 'Patient Name',
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    DropdownButtonFormField<String>(
-                      value: selectedCaseType,
-                      decoration: const InputDecoration(labelText: 'Case Type'),
-                      hint: const Text('Select a case'),
-                      items: _caseTypes
-                          .map((c) => DropdownMenuItem(
-                                value: c,
-                                child: Text(c),
-                              ))
-                          .toList(),
-                      onChanged: (val) =>
-                          setModalState(() => selectedCaseType = val),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: notesController,
-                      decoration: const InputDecoration(labelText: 'Details'),
-                      maxLines: 2,
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Text(
-                          selectedTime != null
-                              ? 'Time: ${selectedTime!.format(context)}'
-                              : 'No time selected',
-                        ),
-                        const Spacer(),
-                        TextButton(
-                          onPressed: pickTime,
-                          child: const Text('Pick time'),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF5D4B8A),
-                        ),
-                        onPressed: saveAppointment,
-                        child: const Text(
-                          'Save appointment',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                ),
-              );
-            },
-          ),
-        );
-      },
     );
-  }
-
-  String _getMonthYearString(DateTime date) {
-    const months = [
-      'January',
-      'February',
-      'March',
-      'April',
-      'May',
-      'June',
-      'July',
-      'August',
-      'September',
-      'October',
-      'November',
-      'December',
-    ];
-    return '${months[date.month - 1]} ${date.year}';
-  }
-
-  String _formatFullDate(DateTime date) {
-    const months = [
-      'January',
-      'February',
-      'March',
-      'April',
-      'May',
-      'June',
-      'July',
-      'August',
-      'September',
-      'October',
-      'November',
-      'December',
-    ];
-    const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-    final weekdayName = weekdays[date.weekday - 1];
-    final monthName = months[date.month - 1];
-
-    return '$weekdayName, $monthName ${date.day}, ${date.year}';
-  }
-
-  bool _isToday(DateTime date) {
-    final now = DateTime.now();
-    return date.year == now.year &&
-        date.month == now.month &&
-        date.day == now.day;
-  }
-
-  bool _isSameDay(DateTime date1, DateTime date2) {
-    return date1.year == date2.year &&
-        date1.month == date2.month &&
-        date1.day == date2.day;
   }
 }

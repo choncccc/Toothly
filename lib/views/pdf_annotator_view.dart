@@ -8,6 +8,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../viewmodel/home_viewmodel.dart';
+import '../services/case_sync_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -432,47 +433,38 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       final savedPath = await _writePdfBytes(pdfBytes, fileName);
 
       final user = Supabase.instance.client.auth.currentUser;
-      String? dbWarning;
+      bool? syncedNow;
       if (user != null) {
         final now = DateTime.now();
         final dateKey =
             DateTime(now.year, now.month, now.day).toIso8601String();
         final timeStr =
             '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-        final row = {
-          'user_id': user.id,
-          'date': dateKey,
-          'title': widget.title,
-          'notes': 'Completed case saved to: $savedPath',
-          'time': timeStr,
-          'case_type': widget.title,
-        };
-        try {
-          await Supabase.instance.client.from('appointments').insert(row);
-        } on PostgrestException catch (e) {
-          dbWarning = 'Saved locally, but DB sync failed: ${e.message}';
-        }
-        try {
-          await Supabase.instance.client.rpc(
-            'increment_cases_completed',
-            params: {'user_id': user.id},
-          );
-          if (mounted) {
-            await context.read<HomeViewmodel>().refresh();
-          }
-        } catch (_) {
-          // Non-fatal; counter just won't bump.
+        final entry = PendingCase(
+          userId: user.id,
+          date: dateKey,
+          title: widget.title,
+          notes: 'Completed case saved to: $savedPath',
+          time: timeStr,
+          caseType: widget.title,
+        );
+        syncedNow = await CaseSyncService.instance.submitCompletedCase(entry);
+        if (syncedNow && mounted) {
+          await context.read<HomeViewmodel>().refresh();
         }
       }
 
       if (mounted) {
+        final offlineQueued = syncedNow == false;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            backgroundColor: dbWarning == null
-                ? const Color(0xFF5D4B8A)
-                : Colors.orange.shade800,
+            backgroundColor: offlineQueued
+                ? Colors.orange.shade800
+                : const Color(0xFF5D4B8A),
             content: Text(
-              dbWarning ?? 'Saved to: $savedPath',
+              offlineQueued
+                  ? 'Saved offline. Will sync when internet is back.'
+                  : 'Saved to: $savedPath',
               style: const TextStyle(color: Colors.white),
             ),
             duration: const Duration(seconds: 4),

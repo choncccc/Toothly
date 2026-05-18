@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -8,11 +10,14 @@ import 'views/login_view.dart';
 import 'views/register_view.dart';
 import 'views/home_view.dart';
 import 'views/create_case_view.dart';
+import 'views/forgot_password_view.dart';
 
 import 'viewmodel/home_viewmodel.dart';
 import 'viewmodel/appointments_viewmodel.dart';
 import 'services/notification_service.dart';
 import 'services/remote/supabase_service.dart';
+import 'services/case_sync_service.dart';
+import 'services/clinical_sync_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,6 +32,10 @@ Future<void> main() async {
 
   await Supabase.initialize(url: supabaseUrl, anonKey: supabaseAnonKey);
   await NotificationService.instance.init();
+  CaseSyncService.instance.start();
+  unawaited(CaseSyncService.instance.syncPending());
+  ClinicalSyncService.instance.start();
+  unawaited(ClinicalSyncService.instance.syncPending());
 
   // Schedule reminders for existing appointments if already logged in
   if (Supabase.instance.client.auth.currentSession != null) {
@@ -40,8 +49,33 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(CaseSyncService.instance.syncPending());
+      unawaited(ClinicalSyncService.instance.syncPending());
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -86,6 +120,7 @@ class MyApp extends StatelessWidget {
           '/register': (context) => const RegisterView(),
           '/home': (context) => const HomeView(),
           '/create-case': (context) => const CreateCaseView(),
+          '/forgot-password': (context) => const ForgotPasswordView(),
         },
       ),
     );

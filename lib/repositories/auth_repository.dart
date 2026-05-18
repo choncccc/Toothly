@@ -27,7 +27,7 @@ class AuthRepository {
     required String email,
     required String password,
     required String userType,
-    required String year,
+    required String clinicLevel,
   }) async {
     try {
       final response = await _supabase.auth.signUp(
@@ -47,8 +47,9 @@ class AuthRepository {
         'user_type': userType,
         'created_at': DateTime.now().toIso8601String(),
       };
-      if (year.trim().isNotEmpty) {
-        profileData['year'] = year;
+      if (clinicLevel.trim().isNotEmpty) {
+        // Stored in existing `year` column — conceptually it's the clinic level.
+        profileData['year'] = clinicLevel;
       }
 
       await _supabase.from('profiles').insert(profileData);
@@ -58,6 +59,19 @@ class AuthRepository {
       throw Exception(e.message);
     } catch (e) {
       throw Exception("Failed to save profile: $e");
+    }
+  }
+
+  /// Sends a password reset email. Supabase delivers a link the user opens
+  /// in a browser to set a new password (configured by Site URL in the
+  /// Supabase project settings).
+  Future<void> sendPasswordReset({required String email}) async {
+    try {
+      await _supabase.auth.resetPasswordForEmail(email.trim());
+    } on AuthException catch (e) {
+      throw Exception(e.message);
+    } catch (e) {
+      throw Exception('Failed to send reset email: $e');
     }
   }
 }

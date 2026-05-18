@@ -2,225 +2,758 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:toothly/viewmodel/auth_viewmodel.dart';
 
+import '../data/clinical_checklist.dart';
 import '../viewmodel/home_viewmodel.dart';
 import '../viewmodel/appointments_viewmodel.dart';
-import '../controller/task_card.dart';
-import '../controller/progress_tile.dart';
+import '../services/case_sync_service.dart';
+import '../services/clinical_sync_service.dart';
+
+// Palette ---------------------------------------------------------------------
+const _bgColor = Color(0xFFF8F9FF);
+const _primary = Color(0xFF5D4B8A);
+const _purpleLight = Color(0xFFB191FF);
+const _purpleDeep = Color(0xFF8F6BFF);
+const _gold = Color(0xFFf7e4b0);
+const _border = Color(0xFFE6E1F5);
 
 class TaskDashboardPage extends StatelessWidget {
   const TaskDashboardPage({super.key});
 
+  String _greetingPhrase() {
+    final h = DateTime.now().hour;
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  }
+
+  String _initials(String name) {
+    final cleaned = name.trim();
+    if (cleaned.isEmpty) return 'U';
+    final parts = cleaned.split(RegExp(r'\s+'));
+    if (parts.length == 1) return parts[0][0].toUpperCase();
+    return (parts.first[0] + parts.last[0]).toUpperCase();
+  }
+
   String _formatApptDate(DateTime date, String? time) {
     const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'June',
-      'July',
-      'Aug',
-      'Sept',
-      'Oct',
-      'Nov',
-      'Dec',
+      'Jan','Feb','Mar','Apr','May','Jun',
+      'Jul','Aug','Sep','Oct','Nov','Dec',
     ];
-    final formatted = '${date.day} ${months[date.month - 1]}';
-    return (time == null || time.isEmpty) ? formatted : '$formatted • $time';
+    final d = '${months[date.month - 1]} ${date.day}';
+    return (time == null || time.isEmpty) ? d : '$d • $time';
+  }
+
+  Future<void> _handleRefresh(BuildContext context) async {
+    await ClinicalSyncService.instance.syncPending();
+    final report = await CaseSyncService.instance.syncPending();
+    if (!context.mounted) return;
+    await Future.wait([
+      context.read<HomeViewmodel>().refresh(),
+      context.read<AppointmentsViewModel>().loadUpcoming(),
+    ]);
+    if (!context.mounted) return;
+    String? msg;
+    Color bg = _primary;
+    if (report.status == SyncStatus.ok && report.pushed > 0) {
+      msg = 'Synced ${report.pushed} offline case'
+          '${report.pushed == 1 ? '' : 's'}';
+    } else if (report.status == SyncStatus.error) {
+      msg = 'Sync error: ${report.error ?? "unknown"}';
+      bg = Colors.red.shade700;
+    }
+    if (msg != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: bg,
+          content: Text(msg, style: const TextStyle(color: Colors.white)),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final controller = context.watch<HomeViewmodel>();
     final apptVM = context.watch<AppointmentsViewModel>();
-
-    final screenWidth = MediaQuery.of(context).size.width;
+    final displayName = ('${controller.user_type} ${controller.fName}').trim();
+    final clinicLevel = controller.clinicLevel;
+    final levelItems = clinicLevel.isEmpty
+        ? const <ChecklistItem>[]
+        : ClinicalChecklist.itemsFor(clinicLevel);
 
     return Scaffold(
+      backgroundColor: _bgColor,
       appBar: AppBar(
+        backgroundColor: _bgColor,
+        elevation: 0,
         automaticallyImplyLeading: false,
-        title: Row(
-          children: [
-            const SizedBox(width: 10),
-            Text(
-              "Hello, ${("${controller.user_type} ${controller.fName}").trim()}!",
-              style: const TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                fontFamily: 'Derrick',
-                letterSpacing: 1.1,
-                color: Color(0xFF5D4B8A),
-              ),
-            ),
-          ],
+        toolbarHeight: 64,
+        title: const Text(
+          'Toothly',
+          style: TextStyle(
+            color: _primary,
+            fontFamily: 'Derrick',
+            fontSize: 22,
+            letterSpacing: 1.4,
+          ),
         ),
         actions: [
           Consumer<AuthViewModel>(
-            builder: (context, authVM, child) {
-              return IconButton(
+            builder: (context, authVM, _) => Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: IconButton(
+                tooltip: 'Sign out',
                 icon: authVM.isLoading
                     ? const SizedBox(
                         width: 20,
                         height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : const Icon(Icons.logout, color: Color(0xFF5D4B8A)),
+                    : const Icon(Icons.logout_rounded, color: _primary),
                 onPressed: authVM.isLoading
                     ? null
                     : () async {
                         await authVM.logout(context);
                       },
-              );
-            },
+              ),
+            ),
           ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
-        child: SingleChildScrollView(
-          child: Column(
-            children: [
-              SizedBox(
-                width: MediaQuery.of(context).size.width * 0.9,
-                child: Container(
-                  height: 180,
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [Color(0xFFB191FF), Color(0xFF8F6BFF)],
+      body: RefreshIndicator(
+        color: _primary,
+        onRefresh: () => _handleRefresh(context),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            _GreetingHero(
+              greeting: _greetingPhrase(),
+              displayName: displayName.isEmpty ? 'there' : displayName,
+              initials: _initials(controller.fName),
+              clinicLevel: clinicLevel,
+            ),
+            const SizedBox(height: 16),
+            _StatsRow(
+              casesCompleted: controller.casesCompleted,
+              upcomingAppointments: apptVM.upcomingCount,
+              clinicLevel: clinicLevel,
+            ),
+            const SizedBox(height: 16),
+            _ClinicalCasesPanel(
+              clinicLevel: clinicLevel,
+              totalItems: levelItems.length,
+              onTap: () => context.read<HomeViewmodel>().onItemTapped(2),
+            ),
+            const SizedBox(height: 16),
+            _PrimaryActionButton(
+              label: 'Add a New Case',
+              icon: Icons.add_rounded,
+              onPressed: () => context.read<HomeViewmodel>().onItemTapped(1),
+            ),
+            const SizedBox(height: 28),
+            const _SectionHeader(title: 'Upcoming Appointments'),
+            const SizedBox(height: 10),
+            _AppointmentsSection(
+              vm: apptVM,
+              formatDate: _formatApptDate,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Greeting hero
+// =============================================================================
+class _GreetingHero extends StatelessWidget {
+  final String greeting;
+  final String displayName;
+  final String initials;
+  final String clinicLevel;
+
+  const _GreetingHero({
+    required this.greeting,
+    required this.displayName,
+    required this.initials,
+    required this.clinicLevel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [_purpleLight, _purpleDeep],
+        ),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: _gold, width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: _purpleDeep.withValues(alpha: 0.25),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: _gold, width: 2),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              initials,
+              style: const TextStyle(
+                color: _primary,
+                fontWeight: FontWeight.bold,
+                fontFamily: 'Derrick',
+                fontSize: 22,
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  greeting,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
+                    fontFamily: 'Roboto',
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontFamily: 'Derrick',
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                if (clinicLevel.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(20),
                     ),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: const Color(0xFFf7e4b0),
-                      width: 2.5,
+                    child: Text(
+                      _clinicianLabel(clinicLevel),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Stats row
+// =============================================================================
+class _StatsRow extends StatelessWidget {
+  final int casesCompleted;
+  final int upcomingAppointments;
+  final String clinicLevel;
+
+  const _StatsRow({
+    required this.casesCompleted,
+    required this.upcomingAppointments,
+    required this.clinicLevel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final clinician = _clinicianLabel(clinicLevel);
+    return Row(
+      children: [
+        Expanded(
+          child: _StatCard(
+            icon: Icons.task_alt_rounded,
+            label: 'Completed',
+            value: casesCompleted.toString(),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _StatCard(
+            icon: Icons.event_rounded,
+            label: 'Upcoming',
+            value: upcomingAppointments.toString(),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _StatCard(
+            icon: Icons.workspace_premium_rounded,
+            label: 'Status',
+            value: clinician,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+String _clinicianLabel(String level) {
+  if (level.isEmpty) return '—';
+  return level.replaceFirst('Level ', 'Clinician ');
+}
+
+class _StatCard extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+
+  const _StatCard({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: _border,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: _primary, size: 18),
+          ),
+          const SizedBox(height: 10),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              maxLines: 1,
+              style: const TextStyle(
+                color: _primary,
+                fontSize: 22,
+                fontFamily: 'Derrick',
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.grey.shade600,
+              fontSize: 12,
+              fontFamily: 'Roboto',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Clinical cases panel
+// =============================================================================
+class _ClinicalCasesPanel extends StatelessWidget {
+  final String clinicLevel;
+  final int totalItems;
+  final VoidCallback onTap;
+
+  const _ClinicalCasesPanel({
+    required this.clinicLevel,
+    required this.totalItems,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final levelLabel = clinicLevel.isEmpty ? 'Not set' : clinicLevel;
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: _border),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [_purpleLight, _purpleDeep],
+                  ),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(
+                  Icons.checklist_rounded,
+                  color: Colors.white,
+                  size: 26,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Clinical Cases',
+                      style: TextStyle(
+                        color: _primary,
+                        fontFamily: 'Derrick',
+                        fontSize: 18,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      clinicLevel.isEmpty
+                          ? 'Set your clinic level in your profile'
+                          : '$levelLabel · $totalItems requirements',
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 12,
+                        fontFamily: 'Roboto',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded, color: _primary),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Primary action
+// =============================================================================
+class _PrimaryActionButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  const _PrimaryActionButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: _purpleDeep.withValues(alpha: 0.25),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: ElevatedButton.icon(
+          onPressed: onPressed,
+          icon: Icon(icon, color: Colors.white),
+          label: Text(
+            label,
+            style: const TextStyle(
+              fontFamily: 'Derrick',
+              fontSize: 16,
+              color: Colors.white,
+              letterSpacing: 0.5,
+            ),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: _purpleDeep,
+            foregroundColor: Colors.white,
+            elevation: 0,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: _gold, width: 1.5),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Section header
+// =============================================================================
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  const _SectionHeader({required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          title,
+          style: const TextStyle(
+            color: _primary,
+            fontFamily: 'Derrick',
+            fontSize: 18,
+            letterSpacing: 0.6,
+          ),
+        ),
+        Container(
+          width: 36,
+          height: 3,
+          decoration: BoxDecoration(
+            color: _gold,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// =============================================================================
+// Appointments section
+// =============================================================================
+class _AppointmentsSection extends StatelessWidget {
+  final AppointmentsViewModel vm;
+  final String Function(DateTime, String?) formatDate;
+
+  const _AppointmentsSection({required this.vm, required this.formatDate});
+
+  @override
+  Widget build(BuildContext context) {
+    if (vm.isLoading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 32),
+        child: Center(child: CircularProgressIndicator(color: _primary)),
+      );
+    }
+    if (vm.appointments.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: _border),
+        ),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: _border,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Icon(Icons.event_busy_rounded,
+                  color: _primary, size: 28),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'No upcoming appointments',
+              style: TextStyle(
+                color: _primary,
+                fontFamily: 'Derrick',
+                fontSize: 16,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'When you book one, it’ll show up here.',
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 12,
+                fontFamily: 'Roboto',
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return Column(
+      children: [
+        for (final a in vm.appointments)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: _AppointmentTile(
+              title: a.title,
+              notes: a.notes ?? '',
+              date: a.date,
+              time: a.time,
+              formatted: formatDate(a.date, a.time),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _AppointmentTile extends StatelessWidget {
+  final String title;
+  final String notes;
+  final DateTime date;
+  final String? time;
+  final String formatted;
+
+  const _AppointmentTile({
+    required this.title,
+    required this.notes,
+    required this.date,
+    required this.time,
+    required this.formatted,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    const months = [
+      'JAN','FEB','MAR','APR','MAY','JUN',
+      'JUL','AUG','SEP','OCT','NOV','DEC',
+    ];
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // Date block
+          Container(
+            width: 54,
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [_purpleLight, _purpleDeep],
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              children: [
+                Text(
+                  months[date.month - 1],
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+                Text(
+                  date.day.toString().padLeft(2, '0'),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontFamily: 'Derrick',
+                    fontSize: 22,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: _primary,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                  ),
+                ),
+                if (notes.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    notes,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.grey.shade700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+                if (time != null && time!.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Row(
                     children: [
-                      const Text(
-                        "CASE COMPLETED:",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontFamily: "Derrick",
-                          fontSize: 20,
-                        ),
-                      ),
-
-                      const SizedBox(height: 4),
-
+                      const Icon(Icons.schedule_rounded,
+                          size: 13, color: _primary),
+                      const SizedBox(width: 4),
                       Text(
-                        controller.casesCompleted.toString(),
+                        time!,
                         style: const TextStyle(
-                          color: Colors.white,
-                          fontFamily: "Derrick",
-                          fontSize: 36,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-
-                      const Spacer(),
-
-                      Align(
-                        alignment: Alignment.bottomRight,
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white,
-                            foregroundColor: const Color(0xFF5D4B8A),
-                            elevation: 0,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 8,
-                            ),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          onPressed: () {
-                            context.read<HomeViewmodel>().onItemTapped(1);
-                          },
-                          child: const Text(
-                            "Add Case",
-                            style: TextStyle(
-                              fontFamily: "Derrick",
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                          color: _primary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ],
                   ),
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              SizedBox(
-                width: screenWidth * 0.9,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TaskCard(
-                        title: "APPOINTMENTS",
-                        doneTask: apptVM.upcomingCount.toString(),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 24),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  "Upcoming Appointments",
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    fontFamily: 'Derrick',
-                    color: Color(0xFF5D4B8A),
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 5),
-
-              SizedBox(
-                height: 475,
-                child: apptVM.isLoading
-                    ? const Center(child: CircularProgressIndicator())
-                    : apptVM.appointments.isEmpty
-                    ? const Center(
-                        child: Text(
-                          "No upcoming appointments.",
-                          style: TextStyle(
-                            color: Color(0xFF5D4B8A),
-                            fontSize: 14,
-                          ),
-                        ),
-                      )
-                    : RefreshIndicator(
-                        onRefresh: () => apptVM.loadUpcoming(),
-                        child: ListView.builder(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          itemCount: apptVM.appointments.length,
-                          itemBuilder: (context, index) {
-                            final a = apptVM.appointments[index];
-                            return ProgressTile(
-                              patientName: a.title,
-                              task: a.notes ?? '',
-                              date: _formatApptDate(a.date, a.time),
-                            );
-                          },
-                        ),
-                      ),
-              ),
-            ],
+                ],
+              ],
+            ),
           ),
-        ),
+          const Icon(Icons.chevron_right_rounded, color: _primary),
+        ],
       ),
     );
   }
