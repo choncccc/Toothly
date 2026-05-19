@@ -180,7 +180,7 @@ class _BrandHeader extends StatelessWidget {
           textAlign: TextAlign.center,
           style: const TextStyle(
             color: _primary,
-            fontFamily: 'Derrick',
+            fontFamily: 'Roboto',
             fontSize: 26,
             letterSpacing: 0.8,
           ),
@@ -327,7 +327,7 @@ class _PrimaryButton extends StatelessWidget {
                 label,
                 style: const TextStyle(
                   color: Colors.white,
-                  fontFamily: 'Derrick',
+                  fontFamily: 'Roboto',
                   fontSize: 16,
                   letterSpacing: 0.6,
                 ),

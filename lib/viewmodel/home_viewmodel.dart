@@ -14,6 +14,9 @@ class HomeViewmodel extends ChangeNotifier {
 
   String user_type = '';
   String fName = 'Guest';
+  String lName = '';
+  String email = '';
+  String? avatarUrl;
   String clinicLevel = '';
   int casesCompleted = 0;
   int selectedIndex = 0;
@@ -21,11 +24,11 @@ class HomeViewmodel extends ChangeNotifier {
   // Getter (not a field) so hot reload picks up new entries without needing a
   // full restart — field initializers only run when the instance is created.
   List<Widget> get pages => const [
-        TaskDashboardPage(),
-        CreateCaseView(),
-        ClinicalCasesView(),
-        AppointmentsView(),
-      ];
+    TaskDashboardPage(),
+    CreateCaseView(),
+    ClinicalCasesView(),
+    AppointmentsView(),
+  ];
 
   StreamSubscription<int>? _syncSub;
 
@@ -49,32 +52,36 @@ class HomeViewmodel extends ChangeNotifier {
 
     if (user == null) {
       fName = 'Guest';
+      lName = '';
+      email = '';
+      avatarUrl = null;
       user_type = '';
       notifyListeners();
       return;
     }
 
+    email = user.email ?? '';
+
     final response = await supabase
         .from('profiles')
-        .select('first_name, user_type, cases_completed, year')
+        .select('first_name, last_name, user_type, cases_completed, year, avatar_url')
         .eq('id', user.id)
         .maybeSingle();
 
     if (response != null) {
       fName = response['first_name'] ?? user.email ?? 'Guest';
+      lName = (response['last_name'] as String?) ?? '';
+      avatarUrl = response['avatar_url'] as String?;
 
-      final type = response['user_type'];
-      user_type = type == 'teacher'
-          ? 'Prof.'
-          : type == 'student'
-          ? 'Dentist'
-          : '';
+      user_type = 'Doc';
 
       casesCompleted = (response['cases_completed'] as int?) ?? 0;
       clinicLevel = (response['year'] as String?) ?? '';
     } else {
       fName = user.userMetadata?['first_name'] ?? user.email ?? 'Guest';
-      user_type = '';
+      lName = user.userMetadata?['last_name'] ?? '';
+      avatarUrl = null;
+      user_type = 'Doc';
       casesCompleted = 0;
       clinicLevel = '';
     }

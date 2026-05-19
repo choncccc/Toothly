@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:toothly/viewmodel/auth_viewmodel.dart';
 
 import '../data/clinical_checklist.dart';
 import '../viewmodel/home_viewmodel.dart';
 import '../viewmodel/appointments_viewmodel.dart';
 import '../services/case_sync_service.dart';
 import '../services/clinical_sync_service.dart';
+import '../services/local/draft_store.dart';
+import 'pdf_annotator_view.dart';
+import 'profile_view.dart';
 
 // Palette ---------------------------------------------------------------------
 const _bgColor = Color(0xFFF8F9FF);
@@ -16,8 +18,15 @@ const _purpleDeep = Color(0xFF8F6BFF);
 const _gold = Color(0xFFf7e4b0);
 const _border = Color(0xFFE6E1F5);
 
-class TaskDashboardPage extends StatelessWidget {
+class TaskDashboardPage extends StatefulWidget {
   const TaskDashboardPage({super.key});
+
+  @override
+  State<TaskDashboardPage> createState() => _TaskDashboardPageState();
+}
+
+class _TaskDashboardPageState extends State<TaskDashboardPage> {
+  final GlobalKey<_DraftsSectionState> _draftsKey = GlobalKey();
 
   String _greetingPhrase() {
     final h = DateTime.now().hour;
@@ -36,8 +45,18 @@ class TaskDashboardPage extends StatelessWidget {
 
   String _formatApptDate(DateTime date, String? time) {
     const months = [
-      'Jan','Feb','Mar','Apr','May','Jun',
-      'Jul','Aug','Sep','Oct','Nov','Dec',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
     ];
     final d = '${months[date.month - 1]} ${date.day}';
     return (time == null || time.isEmpty) ? d : '$d • $time';
@@ -51,11 +70,13 @@ class TaskDashboardPage extends StatelessWidget {
       context.read<HomeViewmodel>().refresh(),
       context.read<AppointmentsViewModel>().loadUpcoming(),
     ]);
+    _draftsKey.currentState?.refresh();
     if (!context.mounted) return;
     String? msg;
     Color bg = _primary;
     if (report.status == SyncStatus.ok && report.pushed > 0) {
-      msg = 'Synced ${report.pushed} offline case'
+      msg =
+          'Synced ${report.pushed} offline case'
           '${report.pushed == 1 ? '' : 's'}';
     } else if (report.status == SyncStatus.error) {
       msg = 'Sync error: ${report.error ?? "unknown"}';
@@ -90,33 +111,32 @@ class TaskDashboardPage extends StatelessWidget {
         automaticallyImplyLeading: false,
         toolbarHeight: 64,
         title: const Text(
-          'Toothly',
+          'TOOTHLY',
           style: TextStyle(
             color: _primary,
             fontFamily: 'Derrick',
+            fontWeight: FontWeight.bold,
             fontSize: 22,
             letterSpacing: 1.4,
           ),
         ),
         actions: [
-          Consumer<AuthViewModel>(
-            builder: (context, authVM, _) => Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: IconButton(
-                tooltip: 'Sign out',
-                icon: authVM.isLoading
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.logout_rounded, color: _primary),
-                onPressed: authVM.isLoading
-                    ? null
-                    : () async {
-                        await authVM.logout(context);
-                      },
-              ),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: IconButton(
+              tooltip: 'Profile',
+              icon: const Icon(Icons.account_circle_rounded, color: _primary),
+              onPressed: () {
+                final home = context.read<HomeViewmodel>();
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ChangeNotifierProvider<HomeViewmodel>.value(
+                      value: home,
+                      child: const ProfileView(),
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         ],
@@ -133,6 +153,7 @@ class TaskDashboardPage extends StatelessWidget {
               displayName: displayName.isEmpty ? 'there' : displayName,
               initials: _initials(controller.fName),
               clinicLevel: clinicLevel,
+              avatarUrl: controller.avatarUrl,
             ),
             const SizedBox(height: 16),
             _StatsRow(
@@ -153,12 +174,10 @@ class TaskDashboardPage extends StatelessWidget {
               onPressed: () => context.read<HomeViewmodel>().onItemTapped(1),
             ),
             const SizedBox(height: 28),
+            _DraftsSection(key: _draftsKey),
             const _SectionHeader(title: 'Upcoming Appointments'),
             const SizedBox(height: 10),
-            _AppointmentsSection(
-              vm: apptVM,
-              formatDate: _formatApptDate,
-            ),
+            _AppointmentsSection(vm: apptVM, formatDate: _formatApptDate),
           ],
         ),
       ),
@@ -174,12 +193,14 @@ class _GreetingHero extends StatelessWidget {
   final String displayName;
   final String initials;
   final String clinicLevel;
+  final String? avatarUrl;
 
   const _GreetingHero({
     required this.greeting,
     required this.displayName,
     required this.initials,
     required this.clinicLevel,
+    required this.avatarUrl,
   });
 
   @override
@@ -209,19 +230,36 @@ class _GreetingHero extends StatelessWidget {
             height: 56,
             decoration: BoxDecoration(
               color: Colors.white,
-              borderRadius: BorderRadius.circular(18),
+              shape: BoxShape.circle,
               border: Border.all(color: _gold, width: 2),
             ),
             alignment: Alignment.center,
-            child: Text(
-              initials,
-              style: const TextStyle(
-                color: _primary,
-                fontWeight: FontWeight.bold,
-                fontFamily: 'Derrick',
-                fontSize: 22,
-              ),
-            ),
+            clipBehavior: Clip.antiAlias,
+            child: avatarUrl == null
+                ? Text(
+                    initials,
+                    style: const TextStyle(
+                      color: _primary,
+                      fontWeight: FontWeight.bold,
+                      fontFamily: 'Roboto',
+                      fontSize: 22,
+                    ),
+                  )
+                : Image.network(
+                    avatarUrl!,
+                    width: 56,
+                    height: 56,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Text(
+                      initials,
+                      style: const TextStyle(
+                        color: _primary,
+                        fontWeight: FontWeight.bold,
+                        fontFamily: 'Roboto',
+                        fontSize: 22,
+                      ),
+                    ),
+                  ),
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -244,7 +282,8 @@ class _GreetingHero extends StatelessWidget {
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 22,
-                    fontFamily: 'Derrick',
+                    fontFamily: 'Roboto',
+                    fontWeight: FontWeight.bold,
                     letterSpacing: 0.8,
                   ),
                 ),
@@ -252,7 +291,9 @@ class _GreetingHero extends StatelessWidget {
                 if (clinicLevel.isNotEmpty)
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.18),
                       borderRadius: BorderRadius.circular(20),
@@ -324,7 +365,7 @@ class _StatsRow extends StatelessWidget {
 
 String _clinicianLabel(String level) {
   if (level.isEmpty) return '—';
-  return level.replaceFirst('Level ', 'Clinician ');
+  return level.replaceFirst('Level ', 'Clinic ');
 }
 
 class _StatCard extends StatelessWidget {
@@ -368,7 +409,7 @@ class _StatCard extends StatelessWidget {
               style: const TextStyle(
                 color: _primary,
                 fontSize: 22,
-                fontFamily: 'Derrick',
+                fontFamily: 'Roboto',
                 fontWeight: FontWeight.bold,
               ),
             ),
@@ -445,7 +486,8 @@ class _ClinicalCasesPanel extends StatelessWidget {
                       'Clinical Cases',
                       style: TextStyle(
                         color: _primary,
-                        fontFamily: 'Derrick',
+                        fontFamily: 'Roboto',
+                        fontWeight: FontWeight.bold,
                         fontSize: 18,
                       ),
                     ),
@@ -507,7 +549,8 @@ class _PrimaryActionButton extends StatelessWidget {
           label: Text(
             label,
             style: const TextStyle(
-              fontFamily: 'Derrick',
+              fontFamily: 'Roboto',
+              fontWeight: FontWeight.bold,
               fontSize: 16,
               color: Colors.white,
               letterSpacing: 0.5,
@@ -545,7 +588,8 @@ class _SectionHeader extends StatelessWidget {
           title,
           style: const TextStyle(
             color: _primary,
-            fontFamily: 'Derrick',
+            fontFamily: 'Roboto',
+            fontWeight: FontWeight.bold,
             fontSize: 18,
             letterSpacing: 0.6,
           ),
@@ -596,15 +640,19 @@ class _AppointmentsSection extends StatelessWidget {
                 color: _border,
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: const Icon(Icons.event_busy_rounded,
-                  color: _primary, size: 28),
+              child: const Icon(
+                Icons.event_busy_rounded,
+                color: _primary,
+                size: 28,
+              ),
             ),
             const SizedBox(height: 12),
             const Text(
               'No upcoming appointments',
               style: TextStyle(
                 color: _primary,
-                fontFamily: 'Derrick',
+                fontFamily: 'Roboto',
+                fontWeight: FontWeight.bold,
                 fontSize: 16,
               ),
             ),
@@ -615,6 +663,7 @@ class _AppointmentsSection extends StatelessWidget {
                 color: Colors.grey.shade600,
                 fontSize: 12,
                 fontFamily: 'Roboto',
+                fontWeight: FontWeight.bold,
               ),
             ),
           ],
@@ -657,8 +706,18 @@ class _AppointmentTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const months = [
-      'JAN','FEB','MAR','APR','MAY','JUN',
-      'JUL','AUG','SEP','OCT','NOV','DEC',
+      'JAN',
+      'FEB',
+      'MAR',
+      'APR',
+      'MAY',
+      'JUN',
+      'JUL',
+      'AUG',
+      'SEP',
+      'OCT',
+      'NOV',
+      'DEC',
     ];
     return Container(
       padding: const EdgeInsets.all(12),
@@ -697,7 +756,8 @@ class _AppointmentTile extends StatelessWidget {
                   date.day.toString().padLeft(2, '0'),
                   style: const TextStyle(
                     color: Colors.white,
-                    fontFamily: 'Derrick',
+                    fontFamily: 'Roboto',
+                    fontWeight: FontWeight.bold,
                     fontSize: 22,
                   ),
                 ),
@@ -725,18 +785,18 @@ class _AppointmentTile extends StatelessWidget {
                     notes,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: Colors.grey.shade700,
-                      fontSize: 12,
-                    ),
+                    style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
                   ),
                 ],
                 if (time != null && time!.isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Row(
                     children: [
-                      const Icon(Icons.schedule_rounded,
-                          size: 13, color: _primary),
+                      const Icon(
+                        Icons.schedule_rounded,
+                        size: 13,
+                        color: _primary,
+                      ),
                       const SizedBox(width: 4),
                       Text(
                         time!,
@@ -754,6 +814,195 @@ class _AppointmentTile extends StatelessWidget {
           ),
           const Icon(Icons.chevron_right_rounded, color: _primary),
         ],
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// Drafts section — in-progress PDF annotations the user saved for later.
+// =============================================================================
+class _DraftsSection extends StatefulWidget {
+  const _DraftsSection({super.key});
+
+  @override
+  State<_DraftsSection> createState() => _DraftsSectionState();
+}
+
+class _DraftsSectionState extends State<_DraftsSection> {
+  late Future<List<CaseDraft>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = DraftStore.list();
+  }
+
+  void refresh() {
+    if (!mounted) return;
+    setState(() => _future = DraftStore.list());
+  }
+
+  Future<void> _openDraft(CaseDraft d) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PdfAnnotatorView(
+          title: d.title,
+          editablePdfPath: d.editablePdfPath,
+          companionPdfPaths: d.companionPdfPaths,
+        ),
+      ),
+    );
+    refresh();
+  }
+
+  Future<void> _confirmDelete(CaseDraft d) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Discard draft?'),
+        content: Text('Delete the draft for "${d.title}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await DraftStore.delete(d.filePath);
+      refresh();
+    }
+  }
+
+  String _formatSavedAt(DateTime t) {
+    final now = DateTime.now();
+    final diff = now.difference(t);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return '${months[t.month - 1]} ${t.day}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<CaseDraft>>(
+      future: _future,
+      builder: (context, snap) {
+        final drafts = snap.data ?? const <CaseDraft>[];
+        if (drafts.isEmpty) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const _SectionHeader(title: 'Continue Drafts'),
+            const SizedBox(height: 10),
+            for (final d in drafts) ...[
+              _DraftCard(
+                draft: d,
+                savedAtLabel: _formatSavedAt(d.savedAt),
+                onTap: () => _openDraft(d),
+                onDelete: () => _confirmDelete(d),
+              ),
+              const SizedBox(height: 8),
+            ],
+            const SizedBox(height: 20),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _DraftCard extends StatelessWidget {
+  final CaseDraft draft;
+  final String savedAtLabel;
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
+
+  const _DraftCard({
+    required this.draft,
+    required this.savedAtLabel,
+    required this.onTap,
+    required this.onDelete,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: _border),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: _border,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.bookmark_rounded,
+                  color: _primary,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      draft.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: _primary,
+                        fontWeight: FontWeight.bold,
+                        fontFamily: 'Roboto',
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Saved $savedAtLabel',
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 12,
+                        fontFamily: 'Roboto',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: 'Discard draft',
+                onPressed: onDelete,
+                icon: Icon(Icons.close_rounded, color: Colors.grey.shade500),
+              ),
+              const Icon(Icons.chevron_right_rounded, color: _primary),
+            ],
+          ),
+        ),
       ),
     );
   }

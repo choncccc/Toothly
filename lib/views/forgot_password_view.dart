@@ -125,7 +125,7 @@ class _ForgotPasswordViewState extends State<ForgotPasswordView> {
                         'Check your email',
                         style: TextStyle(
                           color: _primary,
-                          fontFamily: 'Derrick',
+                          fontFamily: 'Roboto',
                           fontSize: 18,
                         ),
                       ),

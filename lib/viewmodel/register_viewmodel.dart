@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import '../repositories/auth_repository.dart';
 
 class RegisterViewModel {
@@ -14,6 +16,7 @@ class RegisterViewModel {
     required String email,
     required String password,
     required String clinicLevel,
+    File? avatar,
   }) async {
     final fName = firstName.trim();
     final lName = lastName.trim();
@@ -58,6 +61,7 @@ class RegisterViewModel {
         password: pass,
         userType: userType,
         clinicLevel: clinicLevel,
+        avatar: avatar,
       );
       isLoading = false;
       return true;

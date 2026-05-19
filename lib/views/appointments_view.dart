@@ -120,7 +120,7 @@ class _AppointmentsViewState extends State<AppointmentsView> {
         automaticallyImplyLeading: false,
         toolbarHeight: 64,
         title: const Text(
-          'Schedule',
+          'SCHEDULE',
           style: TextStyle(
             color: _primary,
             fontFamily: 'Derrick',
@@ -239,7 +239,7 @@ class _CalendarCard extends StatelessWidget {
           formatButtonVisible: false,
           titleTextStyle: TextStyle(
             color: _primary,
-            fontFamily: 'Derrick',
+            fontFamily: 'Roboto',
             fontSize: 18,
             letterSpacing: 0.6,
           ),
@@ -317,7 +317,7 @@ class _DayHeader extends StatelessWidget {
             _formatLong(date),
             style: const TextStyle(
               color: _primary,
-              fontFamily: 'Derrick',
+              fontFamily: 'Roboto',
               fontSize: 18,
               letterSpacing: 0.4,
             ),
@@ -382,7 +382,7 @@ class _EmptyDayCard extends StatelessWidget {
             'Nothing scheduled',
             style: TextStyle(
               color: _primary,
-              fontFamily: 'Derrick',
+              fontFamily: 'Roboto',
               fontSize: 16,
             ),
           ),
@@ -517,7 +517,7 @@ class _AddButton extends StatelessWidget {
           label: const Text(
             'Add appointment',
             style: TextStyle(
-              fontFamily: 'Derrick',
+              fontFamily: 'Roboto',
               fontSize: 16,
               color: Colors.white,
               letterSpacing: 0.5,
@@ -641,7 +641,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                 'New appointment',
                 style: TextStyle(
                   color: _primary,
-                  fontFamily: 'Derrick',
+                  fontFamily: 'Roboto',
                   fontSize: 20,
                   letterSpacing: 0.6,
                 ),
@@ -692,7 +692,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
                   label: const Text(
                     'Save appointment',
                     style: TextStyle(
-                      fontFamily: 'Derrick',
+                      fontFamily: 'Roboto',
                       fontSize: 16,
                       color: Colors.white,
                       letterSpacing: 0.5,

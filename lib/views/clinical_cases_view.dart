@@ -142,7 +142,7 @@ class _ClinicalCasesViewState extends State<ClinicalCasesView> {
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         title: const Text(
-          'Clinical Cases',
+          'CLINICAL CASES',
           style: TextStyle(
             color: Color(0xFF5D4B8A),
             fontFamily: 'Derrick',
@@ -258,7 +258,7 @@ class _SectionHeader extends StatelessWidget {
               title,
               style: const TextStyle(
                 color: Color(0xFF5D4B8A),
-                fontFamily: 'Derrick',
+                fontFamily: 'Roboto',
                 fontSize: 16,
               ),
             ),
@@ -323,7 +323,7 @@ class _Header extends StatelessWidget {
           Text(level,
               style: const TextStyle(
                 color: Colors.white,
-                fontFamily: 'Derrick',
+                fontFamily: 'Roboto',
                 fontSize: 22,
               )),
           const SizedBox(height: 4),

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'dart:io';
@@ -9,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../viewmodel/home_viewmodel.dart';
 import '../services/case_sync_service.dart';
+import '../services/local/draft_store.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -16,7 +18,13 @@ import 'package:pdfx/pdfx.dart' as pdfx;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-enum _Mode { none, draw, text }
+enum _Mode { none, draw, text, pan }
+
+class _Action {
+  final VoidCallback undo;
+  final VoidCallback redo;
+  const _Action({required this.undo, required this.redo});
+}
 
 class _Stroke {
   final List<Offset> points;
@@ -76,9 +84,12 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
   double _penWidth = 3.0;
   double _textSize = 16.0;
   bool _erasing = false;
-  _Mode _mode = _Mode.none;
+  _Mode _mode = _Mode.draw;
   bool _saving = false;
   String? _error;
+
+  final List<_Action> _undoStack = [];
+  final List<_Action> _redoStack = [];
 
   static const _colors = [
     Colors.blue,
@@ -133,9 +144,183 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
           _pageImages.addAll(images);
           _pageAspectRatios.addAll(ratios);
         });
+        await _maybeRestoreDraft();
       }
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
+    }
+  }
+
+  // ── Draft persistence ─────────────────────────────────────────────────────
+
+  Future<File> _draftFile() => DraftStore.fileFor(widget.editablePdfPath);
+
+  int _encodeColor(Color c) {
+    final a = (c.a * 255).round();
+    final r = (c.r * 255).round();
+    final g = (c.g * 255).round();
+    final b = (c.b * 255).round();
+    return (a << 24) | (r << 16) | (g << 8) | b;
+  }
+
+  Map<String, dynamic> _serializeDraft() {
+    final strokes = <String, dynamic>{};
+    _strokes.forEach((page, list) {
+      strokes['$page'] = list
+          .map((s) => {
+                'color': _encodeColor(s.color),
+                'width': s.width,
+                'points': s.points
+                    .map((o) => [o.dx, o.dy])
+                    .toList(growable: false),
+              })
+          .toList();
+    });
+    final labels = <String, dynamic>{};
+    _textLabels.forEach((page, list) {
+      labels['$page'] = list
+          .map((l) => {
+                'x': l.position.dx,
+                'y': l.position.dy,
+                'text': l.text,
+                'color': _encodeColor(l.color),
+                'fontSize': l.fontSize,
+              })
+          .toList();
+    });
+    return {
+      'savedAt': DateTime.now().toIso8601String(),
+      'title': widget.title,
+      'editablePdfPath': widget.editablePdfPath,
+      'companionPdfPaths': widget.companionPdfPaths,
+      'strokes': strokes,
+      'labels': labels,
+    };
+  }
+
+  void _applyDraft(Map<String, dynamic> data) {
+    final strokesJson = (data['strokes'] as Map?)?.cast<String, dynamic>();
+    final labelsJson = (data['labels'] as Map?)?.cast<String, dynamic>();
+    _strokes.clear();
+    _textLabels.clear();
+    if (strokesJson != null) {
+      strokesJson.forEach((pageStr, raw) {
+        final page = int.tryParse(pageStr);
+        if (page == null) return;
+        final list = (raw as List).map((s) {
+          final pts = (s['points'] as List).map((p) {
+            final l = p as List;
+            return Offset((l[0] as num).toDouble(), (l[1] as num).toDouble());
+          }).toList();
+          return _Stroke(
+            pts,
+            Color(s['color'] as int),
+            (s['width'] as num).toDouble(),
+          );
+        }).toList();
+        _strokes[page] = list;
+      });
+    }
+    if (labelsJson != null) {
+      labelsJson.forEach((pageStr, raw) {
+        final page = int.tryParse(pageStr);
+        if (page == null) return;
+        final list = (raw as List).map((l) {
+          return _TextLabel(
+            position: Offset(
+              (l['x'] as num).toDouble(),
+              (l['y'] as num).toDouble(),
+            ),
+            text: l['text'] as String,
+            color: Color(l['color'] as int),
+            fontSize: (l['fontSize'] as num).toDouble(),
+          );
+        }).toList();
+        _textLabels[page] = list;
+      });
+    }
+  }
+
+  Future<void> _maybeRestoreDraft() async {
+    try {
+      final f = await _draftFile();
+      if (!f.existsSync()) return;
+      final json = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      if (!mounted) return;
+      final restore = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF2D2D44),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          title: const Text(
+            'Continue draft?',
+            style:
+                TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          ),
+          content: const Text(
+            'You have unsaved annotations for this case. Restore them?',
+            style: TextStyle(color: Colors.white70, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text(
+                'Discard',
+                style: TextStyle(color: Colors.redAccent),
+              ),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF8F6BFF),
+              ),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Restore'),
+            ),
+          ],
+        ),
+      );
+      if (restore == true) {
+        if (!mounted) return;
+        setState(() => _applyDraft(json));
+      } else {
+        await _clearDraft();
+      }
+    } catch (_) {
+      // Corrupt draft — silently ignore.
+    }
+  }
+
+  Future<void> _clearDraft() async {
+    try {
+      final f = await _draftFile();
+      if (f.existsSync()) await f.delete();
+    } catch (_) {}
+  }
+
+  Future<void> _saveDraftAndExit() async {
+    try {
+      final f = await _draftFile();
+      await f.writeAsString(jsonEncode(_serializeDraft()));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: Color(0xFF5D4B8A),
+          content: Text(
+            'Draft saved. You can continue later.',
+            style: TextStyle(color: Colors.white),
+          ),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save draft: $e')),
+      );
     }
   }
 
@@ -223,28 +408,88 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
 
   void _endStroke(DragEndDetails d, int page) {
     if (_active == null) return;
+    final added = _active!;
     setState(() {
-      _strokesFor(page).add(_active!);
+      _strokesFor(page).add(added);
       _active = null;
       _drawingPage = -1;
     });
+    _pushAction(_Action(
+      undo: () => _strokesFor(page).remove(added),
+      redo: () => _strokesFor(page).add(added),
+    ));
+  }
+
+  void _pushAction(_Action a) {
+    _undoStack.add(a);
+    _redoStack.clear();
   }
 
   void _undo() {
-    for (int i = (_doc?.pagesCount ?? 0); i >= 1; i--) {
-      final labels = _textLabels[i];
-      if (labels != null && labels.isNotEmpty) {
-        setState(() => labels.removeLast());
-        return;
-      }
-    }
-    for (int i = (_doc?.pagesCount ?? 0); i >= 1; i--) {
-      final s = _strokes[i];
-      if (s != null && s.isNotEmpty) {
-        setState(() => s.removeLast());
-        return;
-      }
-    }
+    if (_undoStack.isEmpty) return;
+    final a = _undoStack.removeLast();
+    setState(a.undo);
+    _redoStack.add(a);
+  }
+
+  void _redo() {
+    if (_redoStack.isEmpty) return;
+    final a = _redoStack.removeLast();
+    setState(a.redo);
+    _undoStack.add(a);
+  }
+
+  Future<void> _clearPage(int page) async {
+    final strokes = _strokes[page] ?? const <_Stroke>[];
+    final labels = _textLabels[page] ?? const <_TextLabel>[];
+    if (strokes.isEmpty && labels.isEmpty) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF2D2D44),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+        ),
+        title: const Text(
+          'Clear page?',
+          style:
+              TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        content: Text(
+          'Remove all annotations from page $page?',
+          style: const TextStyle(color: Colors.white70, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel',
+                style: TextStyle(color: Colors.white70)),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final prevStrokes = List<_Stroke>.from(strokes);
+    final prevLabels = List<_TextLabel>.from(labels);
+    setState(() {
+      _strokes[page] = [];
+      _textLabels[page] = [];
+    });
+    _pushAction(_Action(
+      undo: () {
+        _strokes[page] = List<_Stroke>.from(prevStrokes);
+        _textLabels[page] = List<_TextLabel>.from(prevLabels);
+      },
+      redo: () {
+        _strokes[page] = [];
+        _textLabels[page] = [];
+      },
+    ));
   }
 
   Future<void> _addTextLabel(int page, Offset position) async {
@@ -257,17 +502,20 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       ),
     );
     if (result != null && result.text.isNotEmpty && mounted) {
+      final label = _TextLabel(
+        position: position,
+        text: result.text,
+        color: _color,
+        fontSize: result.fontSize,
+      );
       setState(() {
         _textSize = result.fontSize;
-        _textLabelsFor(page).add(
-          _TextLabel(
-            position: position,
-            text: result.text,
-            color: _color,
-            fontSize: result.fontSize,
-          ),
-        );
+        _textLabelsFor(page).add(label);
       });
+      _pushAction(_Action(
+        undo: () => _textLabelsFor(page).remove(label),
+        redo: () => _textLabelsFor(page).add(label),
+      ));
     }
   }
 
@@ -281,52 +529,24 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       ),
     );
     if (result == null || !mounted) return;
-    setState(() {
-      if (result.text.isEmpty) {
-        _textLabelsFor(page).remove(label);
-      } else {
+    if (result.text.isEmpty) {
+      final list = _textLabelsFor(page);
+      final idx = list.indexOf(label);
+      if (idx == -1) return;
+      setState(() => list.removeAt(idx));
+      _pushAction(_Action(
+        undo: () => _textLabelsFor(page).insert(idx, label),
+        redo: () => _textLabelsFor(page).remove(label),
+      ));
+    } else {
+      setState(() {
         label.text = result.text;
         label.fontSize = result.fontSize;
-      }
-    });
+      });
+    }
   }
 
   // ── Save flow ─────────────────────────────────────────────────────────────
-
-  Future<void> _confirmAndSave() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2D2D44),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-        ),
-        title: const Text(
-          'Save case?',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        content: const Text(
-          'Save this annotated chart to your Downloads folder and submit it as a completed case?',
-          style: TextStyle(color: Colors.white70, height: 1.4),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('No', style: TextStyle(color: Colors.white70)),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF8F6BFF),
-            ),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Yes, save'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true) await _exportPdf();
-  }
 
   Future<bool> _ensureStoragePermission() async {
     if (!Platform.isAndroid) return true;
@@ -432,6 +652,9 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       await _ensureStoragePermission();
       final savedPath = await _writePdfBytes(pdfBytes, fileName);
 
+      // Case is complete — drop any leftover draft.
+      await _clearDraft();
+
       final user = Supabase.instance.client.auth.currentUser;
       bool? syncedNow;
       if (user != null) {
@@ -490,18 +713,29 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
         backgroundColor: const Color(0xFF5D4B8A),
         foregroundColor: Colors.white,
         title: Text(
-          widget.title,
+          widget.title.toUpperCase(),
           style: const TextStyle(
             fontFamily: 'Derrick',
             color: Colors.white,
             fontSize: 18,
+            letterSpacing: 1.2,
           ),
         ),
         actions: [
           IconButton(
             icon: const Icon(Icons.undo),
-            onPressed: _undo,
+            onPressed: _undoStack.isEmpty ? null : _undo,
             tooltip: 'Undo',
+          ),
+          IconButton(
+            icon: const Icon(Icons.redo),
+            onPressed: _redoStack.isEmpty ? null : _redo,
+            tooltip: 'Redo',
+          ),
+          IconButton(
+            icon: const Icon(Icons.bookmark_add_outlined),
+            onPressed: _saving ? null : _saveDraftAndExit,
+            tooltip: 'Continue later',
           ),
           if (_saving)
             const Padding(
@@ -518,7 +752,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
           else
             IconButton(
               icon: const Icon(Icons.save_alt),
-              onPressed: _confirmAndSave,
+              onPressed: _exportPdf,
               tooltip: 'Save',
             ),
         ],
@@ -558,6 +792,15 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                   _erasing = false;
                 }),
                 tooltip: 'Add text',
+              ),
+              _ModeButton(
+                icon: Icons.pan_tool_alt_rounded,
+                active: _mode == _Mode.pan,
+                onTap: () => setState(() {
+                  _mode = _mode == _Mode.pan ? _Mode.none : _Mode.pan;
+                  _erasing = false;
+                }),
+                tooltip: 'Pan & scroll',
               ),
               const SizedBox(width: 8),
               Container(
@@ -714,7 +957,9 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
         Expanded(
           child: SingleChildScrollView(
             controller: _scrollController,
-            physics: const NeverScrollableScrollPhysics(),
+            physics: _mode == _Mode.pan
+                ? const ClampingScrollPhysics()
+                : const NeverScrollableScrollPhysics(),
             child: Column(
               children: [
                 for (int page = 1; page <= _pageImages.length; page++)
@@ -749,7 +994,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
             child: ClipRect(
               child: InteractiveViewer(
                 transformationController: zoom,
-                panEnabled: false,
+                panEnabled: _mode == _Mode.pan,
                 scaleEnabled: true,
                 minScale: 1.0,
                 maxScale: 5.0,
@@ -804,9 +1049,18 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                           child: GestureDetector(
                             behavior: HitTestBehavior.opaque,
                             onTap: () => _editTextLabel(page, label),
-                            onLongPress: () => setState(
-                              () => _textLabelsFor(page).remove(label),
-                            ),
+                            onLongPress: () {
+                              final list = _textLabelsFor(page);
+                              final idx = list.indexOf(label);
+                              if (idx == -1) return;
+                              setState(() => list.removeAt(idx));
+                              _pushAction(_Action(
+                                undo: () => _textLabelsFor(page)
+                                    .insert(idx, label),
+                                redo: () =>
+                                    _textLabelsFor(page).remove(label),
+                              ));
+                            },
                             onPanUpdate: (d) => setState(
                               () => label.position += d.delta,
                             ),
@@ -876,6 +1130,42 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
               );
             },
           ),
+          // Clear-page chip (top-left, only when this page has annotations).
+          if ((_strokes[page]?.isNotEmpty ?? false) ||
+              (_textLabels[page]?.isNotEmpty ?? false))
+            Positioned(
+              top: 6,
+              left: 6,
+              child: Material(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(20),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(20),
+                  onTap: () => _clearPage(page),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.layers_clear_rounded,
+                            color: Colors.white, size: 16),
+                        SizedBox(width: 4),
+                        Text(
+                          'Clear',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );

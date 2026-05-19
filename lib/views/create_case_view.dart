@@ -158,7 +158,7 @@ class _CreateCaseViewState extends State<CreateCaseView> {
         automaticallyImplyLeading: false,
         toolbarHeight: 64,
         title: const Text(
-          'Create Case',
+          'CREATE CASE',
           style: TextStyle(
             color: _primary,
             fontFamily: 'Derrick',
@@ -254,7 +254,7 @@ class _IntroCard extends StatelessWidget {
                   'Pick a form to start',
                   style: TextStyle(
                     color: Colors.white,
-                    fontFamily: 'Derrick',
+                    fontFamily: 'Roboto',
                     fontSize: 18,
                   ),
                 ),
@@ -415,7 +415,7 @@ class _CategoryCardState extends State<_CategoryCard>
                             widget.card.title,
                             style: const TextStyle(
                               color: _primary,
-                              fontFamily: 'Derrick',
+                              fontFamily: 'Roboto',
                               fontSize: 17,
                               letterSpacing: 0.4,
                             ),
@@ -549,7 +549,7 @@ class _EmptyResult extends StatelessWidget {
             'No matching forms',
             style: TextStyle(
               color: _primary,
-              fontFamily: 'Derrick',
+              fontFamily: 'Roboto',
               fontSize: 16,
             ),
           ),

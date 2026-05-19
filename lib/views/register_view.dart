@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:fluttertoast/fluttertoast.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../repositories/auth_repository.dart';
@@ -29,8 +32,19 @@ class _RegisterViewState extends State<RegisterView> {
   String? _selectedLevel;
   bool _obscure = true;
   bool _loading = false;
+  File? _avatar;
 
   late final RegisterViewModel _vm;
+
+  Future<void> _pickAvatar() async {
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 80,
+      maxWidth: 1024,
+    );
+    if (picked == null) return;
+    setState(() => _avatar = File(picked.path));
+  }
 
   @override
   void initState() {
@@ -56,6 +70,7 @@ class _RegisterViewState extends State<RegisterView> {
       email: _emailCtl.text,
       password: _passCtl.text,
       clinicLevel: _selectedLevel ?? '',
+      avatar: _avatar,
     );
     if (!mounted) return;
     setState(() => _loading = false);
@@ -102,7 +117,7 @@ class _RegisterViewState extends State<RegisterView> {
               'Select clinic level',
               style: TextStyle(
                 color: _primary,
-                fontFamily: 'Derrick',
+                fontFamily: 'Roboto',
                 fontSize: 18,
                 letterSpacing: 0.4,
               ),
@@ -157,7 +172,14 @@ class _RegisterViewState extends State<RegisterView> {
                 title: 'Create account',
                 subtitle: 'Sign up to get started with Toothly',
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
+              Center(
+                child: _AvatarPicker(
+                  file: _avatar,
+                  onTap: _pickAvatar,
+                ),
+              ),
+              const SizedBox(height: 20),
               Row(
                 children: [
                   Expanded(
@@ -257,6 +279,62 @@ class _RegisterViewState extends State<RegisterView> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _AvatarPicker extends StatelessWidget {
+  final File? file;
+  final VoidCallback onTap;
+  const _AvatarPicker({required this.file, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Stack(
+        children: [
+          Container(
+            width: 96,
+            height: 96,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white,
+              border: Border.all(color: _border, width: 2),
+            ),
+            child: ClipOval(
+              child: file == null
+                  ? const Icon(
+                      Icons.person_outline_rounded,
+                      size: 44,
+                      color: _primary,
+                    )
+                  : Image.file(
+                      file!,
+                      fit: BoxFit.cover,
+                      width: 96,
+                      height: 96,
+                    ),
+            ),
+          ),
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: const BoxDecoration(
+                color: _purpleDeep,
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.camera_alt_rounded,
+                size: 16,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

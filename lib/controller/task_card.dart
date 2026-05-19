@@ -27,7 +27,7 @@ class TaskCard extends StatelessWidget {
             title,
             style: const TextStyle(
               color: Colors.white,
-              fontFamily: "Derrick",
+              fontFamily: "Roboto",
               fontSize: 20,
             ),
           ),
@@ -35,7 +35,7 @@ class TaskCard extends StatelessWidget {
             doneTask,
             style: const TextStyle(
               color: Colors.white,
-              fontFamily: "Derrick",
+              fontFamily: "Roboto",
               fontSize: 34,
               fontWeight: FontWeight.bold,
             ),
