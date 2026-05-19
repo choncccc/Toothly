@@ -157,6 +157,32 @@ class AppointmentsDb {
     return db.insert('appointments', appt.toMap());
   }
 
+  /// Inserts only if no local row matches on (date, title, time). Used to
+  /// merge server-side appointments into the local DB without duplicating
+  /// the ones already created on this device.
+  Future<void> insertIfMissing(Appointment appt) async {
+    final db = await database;
+    final dateStr = Appointment.dateKey(appt.date);
+    final whereClauses = <String>['date = ?', 'title = ?'];
+    final args = <Object?>[dateStr, appt.title];
+    if (appt.time == null) {
+      whereClauses.add('time IS NULL');
+    } else {
+      whereClauses.add('time = ?');
+      args.add(appt.time);
+    }
+    final existing = await db.query(
+      'appointments',
+      where: whereClauses.join(' AND '),
+      whereArgs: args,
+      limit: 1,
+    );
+    if (existing.isEmpty) {
+      final map = appt.toMap()..remove('id');
+      await db.insert('appointments', map);
+    }
+  }
+
   Future<void> deleteAppointment(int id) async {
     final db = await database;
     await db.delete('appointments', where: 'id = ?', whereArgs: [id]);

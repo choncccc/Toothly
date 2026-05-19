@@ -173,12 +173,6 @@ class _ProfileViewState extends State<ProfileView> {
           ],
           const SizedBox(height: 24),
           _InfoTile(
-            label: 'Role',
-            value: home.user_type.isEmpty ? '—' : home.user_type,
-            icon: Icons.badge_outlined,
-          ),
-          const SizedBox(height: 10),
-          _InfoTile(
             label: 'Clinic level',
             value: home.clinicLevel.isEmpty
                 ? 'Not set'
