@@ -3,11 +3,11 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../repositories/auth_repository.dart';
-import '../viewmodel/auth_viewmodel.dart';
+import '../services/local/profile_store.dart';
 import '../viewmodel/home_viewmodel.dart';
 
 const _bgColor = Color(0xFFF8F9FF);
@@ -25,7 +25,7 @@ class ProfileView extends StatefulWidget {
 }
 
 class _ProfileViewState extends State<ProfileView> {
-  late final AuthRepository _repo;
+  final _store = ProfileStore.instance;
   final _fNameCtl = TextEditingController();
   final _lNameCtl = TextEditingController();
   bool _savingAvatar = false;
@@ -34,7 +34,6 @@ class _ProfileViewState extends State<ProfileView> {
   @override
   void initState() {
     super.initState();
-    _repo = AuthRepository(Supabase.instance.client);
     final home = context.read<HomeViewmodel>();
     _fNameCtl.text = home.fName == 'Guest' ? '' : home.fName;
     _lNameCtl.text = home.lName;
@@ -65,7 +64,14 @@ class _ProfileViewState extends State<ProfileView> {
     if (picked == null) return;
     setState(() => _savingAvatar = true);
     try {
-      await _repo.updateAvatar(file: File(picked.path));
+      // Copy into app documents so the file survives the picker's temp cache.
+      final docs = await getApplicationDocumentsDirectory();
+      final dest = p.join(
+        docs.path,
+        'avatar_${DateTime.now().millisecondsSinceEpoch}.jpg',
+      );
+      await File(picked.path).copy(dest);
+      await _store.setAvatarPath(dest);
       if (!mounted) return;
       await context.read<HomeViewmodel>().refresh();
       Fluttertoast.showToast(
@@ -98,7 +104,7 @@ class _ProfileViewState extends State<ProfileView> {
     }
     setState(() => _savingProfile = true);
     try {
-      await _repo.updateProfile(firstName: fName, lastName: lName);
+      await _store.setName(firstName: fName, lastName: lName);
       if (!mounted) return;
       await context.read<HomeViewmodel>().refresh();
       Fluttertoast.showToast(
@@ -141,7 +147,7 @@ class _ProfileViewState extends State<ProfileView> {
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 28),
         children: [
           _AvatarHeader(
-            avatarUrl: home.avatarUrl,
+            avatarPath: home.avatarPath,
             initials: _initials(home.fName),
             saving: _savingAvatar,
             onTap: _changeAvatar,
@@ -158,19 +164,6 @@ class _ProfileViewState extends State<ProfileView> {
               ),
             ),
           ),
-          if (home.email.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Center(
-              child: Text(
-                home.email,
-                style: TextStyle(
-                  color: Colors.grey.shade700,
-                  fontSize: 13,
-                  fontFamily: 'Roboto',
-                ),
-              ),
-            ),
-          ],
           const SizedBox(height: 24),
           _InfoTile(
             label: 'Clinic level',
@@ -231,47 +224,6 @@ class _ProfileViewState extends State<ProfileView> {
                     ),
             ),
           ),
-          const SizedBox(height: 28),
-          const Divider(color: _border),
-          const SizedBox(height: 12),
-          Consumer<AuthViewModel>(
-            builder: (context, authVM, _) => SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                onPressed: authVM.isLoading
-                    ? null
-                    : () async {
-                        await authVM.logout(context);
-                        if (!context.mounted) return;
-                        Navigator.of(context)
-                            .popUntil((route) => route.isFirst);
-                      },
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.red.shade700,
-                  side: BorderSide(color: Colors.red.shade300),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                ),
-                icon: authVM.isLoading
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.logout_rounded),
-                label: const Text(
-                  'Log out',
-                  style: TextStyle(
-                    fontFamily: 'Roboto',
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                  ),
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -279,13 +231,13 @@ class _ProfileViewState extends State<ProfileView> {
 }
 
 class _AvatarHeader extends StatelessWidget {
-  final String? avatarUrl;
+  final String? avatarPath;
   final String initials;
   final bool saving;
   final VoidCallback onTap;
 
   const _AvatarHeader({
-    required this.avatarUrl,
+    required this.avatarPath,
     required this.initials,
     required this.saving,
     required this.onTap,
@@ -293,6 +245,7 @@ class _AvatarHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final hasAvatar = avatarPath != null && File(avatarPath!).existsSync();
     return Center(
       child: GestureDetector(
         onTap: saving ? null : onTap,
@@ -312,7 +265,7 @@ class _AvatarHeader extends StatelessWidget {
               ),
               alignment: Alignment.center,
               child: ClipOval(
-                child: avatarUrl == null
+                child: !hasAvatar
                     ? Center(
                         child: Text(
                           initials,
@@ -324,8 +277,8 @@ class _AvatarHeader extends StatelessWidget {
                           ),
                         ),
                       )
-                    : Image.network(
-                        avatarUrl!,
+                    : Image.file(
+                        File(avatarPath!),
                         width: 120,
                         height: 120,
                         fit: BoxFit.cover,

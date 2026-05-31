@@ -1,11 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../data/clinical_checklist.dart';
 import '../viewmodel/home_viewmodel.dart';
 import '../viewmodel/appointments_viewmodel.dart';
-import '../services/case_sync_service.dart';
-import '../services/clinical_sync_service.dart';
 import '../services/local/draft_store.dart';
 import 'pdf_annotator_view.dart';
 import 'profile_view.dart';
@@ -63,34 +63,11 @@ class _TaskDashboardPageState extends State<TaskDashboardPage> {
   }
 
   Future<void> _handleRefresh(BuildContext context) async {
-    await ClinicalSyncService.instance.syncPending();
-    final report = await CaseSyncService.instance.syncPending();
-    if (!context.mounted) return;
     await Future.wait([
       context.read<HomeViewmodel>().refresh(),
       context.read<AppointmentsViewModel>().loadUpcoming(),
     ]);
     _draftsKey.currentState?.refresh();
-    if (!context.mounted) return;
-    String? msg;
-    Color bg = _primary;
-    if (report.status == SyncStatus.ok && report.pushed > 0) {
-      msg =
-          'Synced ${report.pushed} offline case'
-          '${report.pushed == 1 ? '' : 's'}';
-    } else if (report.status == SyncStatus.error) {
-      msg = 'Sync error: ${report.error ?? "unknown"}';
-      bg = Colors.red.shade700;
-    }
-    if (msg != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: bg,
-          content: Text(msg, style: const TextStyle(color: Colors.white)),
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
   }
 
   @override
@@ -153,7 +130,7 @@ class _TaskDashboardPageState extends State<TaskDashboardPage> {
               displayName: displayName.isEmpty ? 'there' : displayName,
               initials: _initials(controller.fName),
               clinicLevel: clinicLevel,
-              avatarUrl: controller.avatarUrl,
+              avatarPath: controller.avatarPath,
             ),
             const SizedBox(height: 16),
             _StatsRow(
@@ -193,14 +170,14 @@ class _GreetingHero extends StatelessWidget {
   final String displayName;
   final String initials;
   final String clinicLevel;
-  final String? avatarUrl;
+  final String? avatarPath;
 
   const _GreetingHero({
     required this.greeting,
     required this.displayName,
     required this.initials,
     required this.clinicLevel,
-    required this.avatarUrl,
+    required this.avatarPath,
   });
 
   @override
@@ -235,7 +212,7 @@ class _GreetingHero extends StatelessWidget {
             ),
             alignment: Alignment.center,
             clipBehavior: Clip.antiAlias,
-            child: avatarUrl == null
+            child: (avatarPath == null || !File(avatarPath!).existsSync())
                 ? Text(
                     initials,
                     style: const TextStyle(
@@ -245,8 +222,8 @@ class _GreetingHero extends StatelessWidget {
                       fontSize: 22,
                     ),
                   )
-                : Image.network(
-                    avatarUrl!,
+                : Image.file(
+                    File(avatarPath!),
                     width: 56,
                     height: 56,
                     fit: BoxFit.cover,

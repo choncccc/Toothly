@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -6,8 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../data/clinical_checklist.dart';
-import '../services/clinical_sync_service.dart';
-import '../services/remote/clinical_cases_service.dart';
+import '../services/local/clinical_store.dart';
+import '../services/local/profile_store.dart';
 import '../viewmodel/home_viewmodel.dart';
 
 class ClinicalCasesView extends StatefulWidget {
@@ -18,31 +17,17 @@ class ClinicalCasesView extends StatefulWidget {
 }
 
 class _ClinicalCasesViewState extends State<ClinicalCasesView> {
-  final _service = ClinicalCasesService.instance;
-  final _sync = ClinicalSyncService.instance;
+  final _store = ClinicalStore.instance;
   late Future<_LoadedData> _future;
   // Live checked state — initialized from the loaded snapshot, updated
   // optimistically on each toggle so we can detect completion immediately.
   final Map<String, bool> _checked = {};
   bool _promoting = false;
-  StreamSubscription<void>? _syncSub;
 
   @override
   void initState() {
     super.initState();
     _future = _load();
-    _syncSub = _sync.onSynced.listen((_) {
-      if (mounted) _refresh();
-    });
-    // Opportunistic flush — covers the case where the user opens this view
-    // right after coming online.
-    _sync.syncPending();
-  }
-
-  @override
-  void dispose() {
-    _syncSub?.cancel();
-    super.dispose();
   }
 
   Future<_LoadedData> _load() async {
@@ -56,7 +41,7 @@ class _ClinicalCasesViewState extends State<ClinicalCasesView> {
       return _LoadedData(level: '', items: const [], checked: const {});
     }
     final items = ClinicalChecklist.itemsFor(level);
-    final checked = await _service.fetchCheckedItems(level);
+    final checked = await _store.fetchCheckedItems(level);
     _checked
       ..clear()
       ..addAll(checked);
@@ -103,7 +88,7 @@ class _ClinicalCasesViewState extends State<ClinicalCasesView> {
         return;
       }
       final next = levels[idx + 1];
-      await _service.setClinicLevel(next);
+      await ProfileStore.instance.setClinicLevel(next);
       if (!mounted) return;
       await context.read<HomeViewmodel>().refresh();
       if (!mounted) return;
@@ -206,7 +191,7 @@ class _ClinicalCasesViewState extends State<ClinicalCasesView> {
               item: item,
               initiallyChecked: _checked[item.key] ?? false,
               onCheckedChanged: (v) => _onItemCheckedChanged(data, item, v),
-              service: _service,
+              store: _store,
             ));
           }
 
@@ -352,14 +337,14 @@ class _ChecklistTile extends StatefulWidget {
   final String level;
   final ChecklistItem item;
   final bool initiallyChecked;
-  final ClinicalCasesService service;
+  final ClinicalStore store;
   final ValueChanged<bool>? onCheckedChanged;
   const _ChecklistTile({
     super.key,
     required this.level,
     required this.item,
     required this.initiallyChecked,
-    required this.service,
+    required this.store,
     this.onCheckedChanged,
   });
 
@@ -368,11 +353,10 @@ class _ChecklistTile extends StatefulWidget {
 }
 
 class _ChecklistTileState extends State<_ChecklistTile> {
-  final _sync = ClinicalSyncService.instance;
   late bool _checked;
   bool _saving = false;
   bool _uploadsExpanded = false;
-  Future<List<_FileEntry>>? _uploadsFuture;
+  Future<List<ClinicalFile>>? _uploadsFuture;
 
   @override
   void initState() {
@@ -380,24 +364,11 @@ class _ChecklistTileState extends State<_ChecklistTile> {
     _checked = widget.initiallyChecked;
   }
 
-  Future<List<_FileEntry>> _loadFiles() async {
-    final pending = await _sync.listPendingUploads(
+  Future<List<ClinicalFile>> _loadFiles() {
+    return widget.store.listUploads(
       level: widget.level,
       itemKey: widget.item.key,
     );
-    List<ClinicalUpload> remote = const [];
-    try {
-      remote = await widget.service.listUploads(
-        level: widget.level,
-        itemKey: widget.item.key,
-      );
-    } catch (_) {
-      // Offline or RLS — fall back to just the local queue.
-    }
-    return [
-      ...pending.map(_FileEntry.pending),
-      ...remote.map(_FileEntry.remote),
-    ];
   }
 
   void _refreshFiles() {
@@ -413,9 +384,8 @@ class _ChecklistTileState extends State<_ChecklistTile> {
       _checked = v;
       _saving = true;
     });
-    bool? pushed;
     try {
-      pushed = await _sync.submitCheck(
+      await widget.store.setChecked(
         level: widget.level,
         itemKey: widget.item.key,
         checked: v,
@@ -428,21 +398,8 @@ class _ChecklistTileState extends State<_ChecklistTile> {
           SnackBar(content: Text('Save failed: $e')),
         );
       }
-      return;
     } finally {
       if (mounted) setState(() => _saving = false);
-    }
-    if (pushed == false && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: Colors.orange.shade800,
-          content: const Text(
-            'Saved offline. Will sync when online.',
-            style: TextStyle(color: Colors.white),
-          ),
-          duration: const Duration(seconds: 2),
-        ),
-      );
     }
   }
 
@@ -457,18 +414,22 @@ class _ChecklistTileState extends State<_ChecklistTile> {
     if (path == null) return;
 
     if (mounted) setState(() => _saving = true);
-    bool? pushed;
     try {
-      pushed = await _sync.submitUpload(
+      await widget.store.addUpload(
         level: widget.level,
         itemKey: widget.item.key,
         sourceFile: File(path),
         displayName: picked.name,
       );
+      // Attaching a file marks a clinical case as completed.
+      await ProfileStore.instance.incrementCasesCompleted();
+      if (mounted) {
+        await context.read<HomeViewmodel>().refresh();
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Upload failed: $e')),
+          SnackBar(content: Text('Attach failed: $e')),
         );
       }
       return;
@@ -478,16 +439,12 @@ class _ChecklistTileState extends State<_ChecklistTile> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: pushed == true
-            ? const Color(0xFF5D4B8A)
-            : Colors.orange.shade800,
-        content: Text(
-          pushed == true
-              ? 'Uploaded'
-              : 'Saved offline. Will upload when online.',
-          style: const TextStyle(color: Colors.white),
+        backgroundColor: const Color(0xFF5D4B8A),
+        content: const Text(
+          'File attached',
+          style: TextStyle(color: Colors.white),
         ),
-        duration: const Duration(seconds: 3),
+        duration: const Duration(seconds: 2),
       ),
     );
     setState(() {
@@ -503,48 +460,25 @@ class _ChecklistTileState extends State<_ChecklistTile> {
     if (_uploadsExpanded) _refreshFiles();
   }
 
-  Future<void> _openUpload(ClinicalUpload u) async {
-    try {
-      final url = await widget.service.createSignedUrl(u.filePath);
-      if (!mounted) return;
-      showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: Text(u.fileName),
-          content: SelectableText(url),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-          ],
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not open: $e')),
-        );
-      }
-    }
+  Future<void> _openFile(ClinicalFile f) async {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(f.displayName),
+        content: SelectableText(f.filePath),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
-  Future<void> _deleteRemote(ClinicalUpload u) async {
+  Future<void> _deleteFile(ClinicalFile f) async {
     try {
-      await widget.service.deleteUpload(u);
-      _refreshFiles();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Delete failed: $e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _deletePending(PendingUpload u) async {
-    try {
-      await _sync.deletePendingUpload(u.id);
+      await widget.store.deleteUpload(f);
       _refreshFiles();
     } catch (e) {
       if (mounted) {
@@ -621,7 +555,7 @@ class _ChecklistTileState extends State<_ChecklistTile> {
           if (_uploadsExpanded)
             Padding(
               padding: const EdgeInsets.only(left: 8, right: 8, bottom: 4),
-              child: FutureBuilder<List<_FileEntry>>(
+              child: FutureBuilder<List<ClinicalFile>>(
                 future: _uploadsFuture,
                 builder: (context, snap) {
                   if (snap.connectionState != ConnectionState.done) {
@@ -647,45 +581,24 @@ class _ChecklistTileState extends State<_ChecklistTile> {
                   return Column(
                     children: [
                       for (final e in entries)
-                        if (e.pending != null)
-                          ListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.cloud_off,
-                                color: Colors.orange),
-                            title: Text(e.pending!.displayName,
-                                style: const TextStyle(fontSize: 13)),
-                            subtitle: Text(
-                              'Queued ${_formatTs(e.pending!.queuedAt)} • offline',
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  color: Colors.orange.shade800),
-                            ),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.delete_outline,
-                                  color: Colors.redAccent),
-                              onPressed: () => _deletePending(e.pending!),
-                            ),
-                          )
-                        else
-                          ListTile(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            leading: const Icon(Icons.insert_drive_file,
-                                color: Color(0xFF8F6BFF)),
-                            title: Text(e.remote!.fileName,
-                                style: const TextStyle(fontSize: 13)),
-                            subtitle: Text(
-                              _formatTs(e.remote!.uploadedAt),
-                              style: const TextStyle(fontSize: 11),
-                            ),
-                            onTap: () => _openUpload(e.remote!),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.delete_outline,
-                                  color: Colors.redAccent),
-                              onPressed: () => _deleteRemote(e.remote!),
-                            ),
+                        ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.insert_drive_file,
+                              color: Color(0xFF8F6BFF)),
+                          title: Text(e.displayName,
+                              style: const TextStyle(fontSize: 13)),
+                          subtitle: Text(
+                            _formatTs(e.uploadedAt),
+                            style: const TextStyle(fontSize: 11),
                           ),
+                          onTap: () => _openFile(e),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete_outline,
+                                color: Colors.redAccent),
+                            onPressed: () => _deleteFile(e),
+                          ),
+                        ),
                     ],
                   );
                 },
@@ -701,14 +614,6 @@ class _ChecklistTileState extends State<_ChecklistTile> {
     return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} '
         '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
   }
-}
-
-class _FileEntry {
-  final ClinicalUpload? remote;
-  final PendingUpload? pending;
-  const _FileEntry._({this.remote, this.pending});
-  factory _FileEntry.remote(ClinicalUpload u) => _FileEntry._(remote: u);
-  factory _FileEntry.pending(PendingUpload u) => _FileEntry._(pending: u);
 }
 
 class _EmptyBox extends StatelessWidget {

@@ -4,7 +4,6 @@ import 'package:table_calendar/table_calendar.dart';
 
 import '../services/local/appointment_db.dart';
 import '../services/notification_service.dart';
-import '../services/remote/supabase_service.dart';
 import '../viewmodel/appointments_viewmodel.dart';
 
 // Palette ---------------------------------------------------------------------
@@ -602,7 +601,6 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
     );
     final id = await _db.insertAppointment(appt);
     final saved = appt.copyWith(id: id);
-    SupabaseService.instance.insertAppointment(appt).ignore();
     NotificationService.instance.scheduleReminder(saved).ignore();
     if (!mounted) return;
     context.read<AppointmentsViewModel>().loadUpcoming();

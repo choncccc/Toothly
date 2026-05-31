@@ -7,16 +7,12 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
-import '../viewmodel/home_viewmodel.dart';
-import '../services/case_sync_service.dart';
 import '../services/local/draft_store.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdfx/pdfx.dart' as pdfx;
 import 'package:permission_handler/permission_handler.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 enum _Mode { none, draw, text, pan }
 
@@ -655,39 +651,12 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       // Case is complete — drop any leftover draft.
       await _clearDraft();
 
-      final user = Supabase.instance.client.auth.currentUser;
-      bool? syncedNow;
-      if (user != null) {
-        final now = DateTime.now();
-        final dateKey =
-            DateTime(now.year, now.month, now.day).toIso8601String();
-        final timeStr =
-            '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-        final entry = PendingCase(
-          userId: user.id,
-          date: dateKey,
-          title: widget.title,
-          notes: 'Completed case saved to: $savedPath',
-          time: timeStr,
-          caseType: widget.title,
-        );
-        syncedNow = await CaseSyncService.instance.submitCompletedCase(entry);
-        if (syncedNow && mounted) {
-          await context.read<HomeViewmodel>().refresh();
-        }
-      }
-
       if (mounted) {
-        final offlineQueued = syncedNow == false;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            backgroundColor: offlineQueued
-                ? Colors.orange.shade800
-                : const Color(0xFF5D4B8A),
+            backgroundColor: const Color(0xFF5D4B8A),
             content: Text(
-              offlineQueued
-                  ? 'Saved offline. Will sync when internet is back.'
-                  : 'Saved to: $savedPath',
+              'Saved to: $savedPath',
               style: const TextStyle(color: Colors.white),
             ),
             duration: const Duration(seconds: 4),
