@@ -3,6 +3,7 @@ import 'package:fluttertoast/fluttertoast.dart';
 
 import '../data/clinical_checklist.dart';
 import '../services/local/profile_store.dart';
+import '../widgets/animations.dart';
 
 // Palette ---------------------------------------------------------------------
 const _bgColor = Color(0xFFF8F9FF);
@@ -127,7 +128,8 @@ class _NamePage extends StatelessWidget {
   Widget build(BuildContext context) {
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 32),
-      child: Column(
+      child: FadeSlideIn(
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const _Logo(),
@@ -155,6 +157,7 @@ class _NamePage extends StatelessWidget {
           const SizedBox(height: 28),
           _PrimaryButton(label: 'Continue', onPressed: onNext),
         ],
+        ),
       ),
     );
   }
@@ -185,17 +188,28 @@ class _ClinicLevelPage extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const _Logo(),
-          const SizedBox(height: 24),
-          const _Title('Your clinic level'),
-          const SizedBox(height: 6),
-          const _Subtitle('Pick the clinic level you are currently in.'),
+          const FadeSlideIn(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _Logo(),
+                SizedBox(height: 24),
+                _Title('Your clinic level'),
+                SizedBox(height: 6),
+                _Subtitle('Pick the clinic level you are currently in.'),
+              ],
+            ),
+          ),
           const SizedBox(height: 28),
-          for (final level in ClinicalChecklist.levels) ...[
-            _LevelTile(
-              level: level,
-              selected: level == selected,
-              onTap: () => onSelect(level),
+          for (final (i, level) in ClinicalChecklist.levels.indexed) ...[
+            FadeSlideIn(
+              delay: Duration(milliseconds: 100 + i * 90),
+              child: _LevelTile(
+                level: level,
+                label: _clinicLabel(level),
+                selected: level == selected,
+                onTap: () => onSelect(level),
+              ),
             ),
             const SizedBox(height: 12),
           ],
@@ -217,13 +231,30 @@ class _ClinicLevelPage extends StatelessWidget {
   }
 }
 
+/// Maps a canonical level value (e.g. `Level I`) to the label shown during
+/// onboarding (e.g. `Clinic 1`). The stored value is unchanged.
+String _clinicLabel(String level) {
+  switch (level) {
+    case 'Level I':
+      return 'Clinic 1';
+    case 'Level II':
+      return 'Clinic 2';
+    case 'Level III':
+      return 'Clinic 3';
+    default:
+      return level;
+  }
+}
+
 class _LevelTile extends StatelessWidget {
   final String level;
+  final String label;
   final bool selected;
   final VoidCallback onTap;
 
   const _LevelTile({
     required this.level,
+    required this.label,
     required this.selected,
     required this.onTap,
   });
@@ -253,7 +284,7 @@ class _LevelTile extends StatelessWidget {
             ),
             const SizedBox(width: 14),
             Text(
-              level,
+              label,
               style: TextStyle(
                 color: selected ? Colors.white : _primary,
                 fontSize: 17,

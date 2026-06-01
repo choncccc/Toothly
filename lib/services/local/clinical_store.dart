@@ -90,6 +90,17 @@ class ClinicalStore {
     return map;
   }
 
+  /// Total number of completed (checked) checklist items across all levels.
+  /// Used as the source of truth for the dashboard "Completed" stat so it stays
+  /// in sync as attachments are added or removed.
+  Future<int> countAllChecked() async {
+    final db = await _database;
+    final result = await db.rawQuery(
+      'SELECT COUNT(*) AS c FROM checks WHERE checked = 1',
+    );
+    return Sqflite.firstIntValue(result) ?? 0;
+  }
+
   Future<void> setChecked({
     required String level,
     required String itemKey,

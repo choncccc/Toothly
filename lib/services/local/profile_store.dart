@@ -67,8 +67,4 @@ class ProfileStore {
   Future<void> setAvatarPath(String path) async {
     await _p.setString(_kAvatarPath, path);
   }
-
-  Future<void> incrementCasesCompleted() async {
-    await _p.setInt(_kCasesCompleted, casesCompleted + 1);
-  }
 }

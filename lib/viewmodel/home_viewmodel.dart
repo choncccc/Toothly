@@ -4,6 +4,7 @@ import '../views/task_dashboard_view.dart';
 import '../views/appointments_view.dart';
 import '../views/clinical_cases_view.dart';
 import '../services/local/profile_store.dart';
+import '../services/local/clinical_store.dart';
 
 class HomeViewmodel extends ChangeNotifier {
   final _store = ProfileStore.instance;
@@ -37,7 +38,7 @@ class HomeViewmodel extends ChangeNotifier {
     lName = _store.lastName;
     avatarPath = _store.avatarPath;
     clinicLevel = _store.clinicLevel;
-    casesCompleted = _store.casesCompleted;
+    casesCompleted = await ClinicalStore.instance.countAllChecked();
     user_type = 'Doc';
     notifyListeners();
   }

@@ -7,6 +7,7 @@ import '../data/clinical_checklist.dart';
 import '../viewmodel/home_viewmodel.dart';
 import '../viewmodel/appointments_viewmodel.dart';
 import '../services/local/draft_store.dart';
+import '../widgets/animations.dart';
 import 'pdf_annotator_view.dart';
 import 'profile_view.dart';
 
@@ -125,30 +126,41 @@ class _TaskDashboardPageState extends State<TaskDashboardPage> {
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
           physics: const AlwaysScrollableScrollPhysics(),
           children: [
-            _GreetingHero(
-              greeting: _greetingPhrase(),
-              displayName: displayName.isEmpty ? 'there' : displayName,
-              initials: _initials(controller.fName),
-              clinicLevel: clinicLevel,
-              avatarPath: controller.avatarPath,
+            FadeSlideIn(
+              child: _GreetingHero(
+                greeting: _greetingPhrase(),
+                displayName: displayName.isEmpty ? 'there' : displayName,
+                initials: _initials(controller.fName),
+                clinicLevel: clinicLevel,
+                avatarPath: controller.avatarPath,
+              ),
             ),
             const SizedBox(height: 16),
-            _StatsRow(
-              casesCompleted: controller.casesCompleted,
-              upcomingAppointments: apptVM.upcomingCount,
-              clinicLevel: clinicLevel,
+            FadeSlideIn(
+              delay: const Duration(milliseconds: 80),
+              child: _StatsRow(
+                casesCompleted: controller.casesCompleted,
+                upcomingAppointments: apptVM.upcomingCount,
+                clinicLevel: clinicLevel,
+              ),
             ),
             const SizedBox(height: 16),
-            _ClinicalCasesPanel(
-              clinicLevel: clinicLevel,
-              totalItems: levelItems.length,
-              onTap: () => context.read<HomeViewmodel>().onItemTapped(2),
+            FadeSlideIn(
+              delay: const Duration(milliseconds: 160),
+              child: _ClinicalCasesPanel(
+                clinicLevel: clinicLevel,
+                totalItems: levelItems.length,
+                onTap: () => context.read<HomeViewmodel>().onItemTapped(2),
+              ),
             ),
             const SizedBox(height: 16),
-            _PrimaryActionButton(
-              label: 'Add a New Case',
-              icon: Icons.add_rounded,
-              onPressed: () => context.read<HomeViewmodel>().onItemTapped(1),
+            FadeSlideIn(
+              delay: const Duration(milliseconds: 240),
+              child: _PrimaryActionButton(
+                label: 'Add a New Case',
+                icon: Icons.add_rounded,
+                onPressed: () => context.read<HomeViewmodel>().onItemTapped(1),
+              ),
             ),
             const SizedBox(height: 28),
             _DraftsSection(key: _draftsKey),
@@ -380,14 +392,22 @@ class _StatCard extends StatelessWidget {
           FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,
-            child: Text(
-              value,
-              maxLines: 1,
-              style: const TextStyle(
-                color: _primary,
-                fontSize: 22,
-                fontFamily: 'Roboto',
-                fontWeight: FontWeight.bold,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 350),
+              transitionBuilder: (child, anim) => ScaleTransition(
+                scale: anim,
+                child: FadeTransition(opacity: anim, child: child),
+              ),
+              child: Text(
+                value,
+                key: ValueKey(value),
+                maxLines: 1,
+                style: const TextStyle(
+                  color: _primary,
+                  fontSize: 22,
+                  fontFamily: 'Roboto',
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ),

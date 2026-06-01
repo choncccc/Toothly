@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:table_calendar/table_calendar.dart';
@@ -5,6 +6,7 @@ import 'package:table_calendar/table_calendar.dart';
 import '../services/local/appointment_db.dart';
 import '../services/notification_service.dart';
 import '../viewmodel/appointments_viewmodel.dart';
+import '../widgets/animations.dart';
 
 // Palette ---------------------------------------------------------------------
 const _bgColor = Color(0xFFF8F9FF);
@@ -172,10 +174,14 @@ class _AppointmentsViewState extends State<AppointmentsView> {
             else if (_selectedDayAppointments.isEmpty)
               const _EmptyDayCard()
             else
-              for (final a in _selectedDayAppointments)
+              for (final (i, a) in _selectedDayAppointments.indexed)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 10),
-                  child: _AppointmentRow(appt: a),
+                  child: FadeSlideIn(
+                    key: ValueKey(a.id ?? '${a.title}_$i'),
+                    delay: Duration(milliseconds: (i * 60).clamp(0, 360)),
+                    child: _AppointmentRow(appt: a),
+                  ),
                 ),
             const SizedBox(height: 16),
             _AddButton(onPressed: _openAddSheet),
@@ -286,7 +292,7 @@ class _CalendarCard extends StatelessWidget {
             fontWeight: FontWeight.bold,
           ),
           markerDecoration: const BoxDecoration(
-            color: _gold,
+            color: Color(0xFFE53935),
             shape: BoxShape.circle,
           ),
           markersAlignment: Alignment.bottomCenter,
@@ -565,19 +571,64 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
   }
 
   Future<void> _pickTime() async {
-    final picked = await showTimePicker(
+    final now = DateTime.now();
+    final initial = _time ?? TimeOfDay.now();
+    var temp = DateTime(now.year, now.month, now.day, initial.hour, initial.minute);
+
+    final picked = await showModalBottomSheet<TimeOfDay>(
       context: context,
-      initialTime: _time ?? TimeOfDay.now(),
-      builder: (ctx, child) => Theme(
-        data: Theme.of(ctx).copyWith(
-          colorScheme: const ColorScheme.light(
-            primary: _purpleDeep,
-            onPrimary: Colors.white,
-            surface: Colors.white,
-            onSurface: _primary,
-          ),
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text(
+                    'Cancel',
+                    style: TextStyle(color: Colors.grey),
+                  ),
+                ),
+                const Text(
+                  'Select time',
+                  style: TextStyle(
+                    color: _primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(
+                    ctx,
+                    TimeOfDay(hour: temp.hour, minute: temp.minute),
+                  ),
+                  child: const Text(
+                    'Done',
+                    style: TextStyle(
+                      color: _purpleDeep,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const Divider(height: 1, color: _border),
+            SizedBox(
+              height: 216,
+              child: CupertinoDatePicker(
+                mode: CupertinoDatePickerMode.time,
+                use24hFormat: false,
+                initialDateTime: temp,
+                onDateTimeChanged: (dt) => temp = dt,
+              ),
+            ),
+          ],
         ),
-        child: child!,
       ),
     );
     if (picked != null) setState(() => _time = picked);
@@ -596,7 +647,7 @@ class _AddAppointmentSheetState extends State<_AddAppointmentSheet> {
       date: widget.date,
       title: title,
       notes: _notesCtl.text.trim().isEmpty ? null : _notesCtl.text.trim(),
-      time: _time?.format(context),
+      time: _time != null ? _format12h(_time!) : null,
       caseType: _caseType,
     );
     final id = await _db.insertAppointment(appt);
@@ -825,6 +876,16 @@ class _CaseTypeDropdown extends StatelessWidget {
   }
 }
 
+/// Formats a [TimeOfDay] as a 12-hour string (e.g. `9:05 AM`), independent of
+/// the device's 24-hour setting.
+String _format12h(TimeOfDay t) {
+  final period = t.hour < 12 ? 'AM' : 'PM';
+  var hour = t.hour % 12;
+  if (hour == 0) hour = 12;
+  final minute = t.minute.toString().padLeft(2, '0');
+  return '$hour:$minute $period';
+}
+
 class _TimePickerRow extends StatelessWidget {
   final TimeOfDay? time;
   final VoidCallback onPick;
@@ -844,11 +905,23 @@ class _TimePickerRow extends StatelessWidget {
           const Icon(Icons.schedule_rounded, color: _primary, size: 18),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(
-              time != null ? time!.format(context) : 'Not set',
-              style: const TextStyle(
-                color: _primary,
-                fontWeight: FontWeight.w600,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 250),
+              transitionBuilder: (child, anim) => FadeTransition(
+                opacity: anim,
+                child: SizeTransition(
+                  sizeFactor: anim,
+                  axis: Axis.vertical,
+                  child: child,
+                ),
+              ),
+              child: Text(
+                time != null ? _format12h(time!) : 'Not set',
+                key: ValueKey(time == null ? 'none' : '${time!.hour}:${time!.minute}'),
+                style: const TextStyle(
+                  color: _primary,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),

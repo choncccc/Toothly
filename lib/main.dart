@@ -44,6 +44,16 @@ class MyApp extends StatelessWidget {
         initialRoute: '/',
         theme: ThemeData(
           scaffoldBackgroundColor: const Color(0xFFF8F9FF),
+          // Smooth, consistent page transitions across all platforms.
+          pageTransitionsTheme: const PageTransitionsTheme(
+            builders: {
+              TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
+              TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+              TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
+              TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
+              TargetPlatform.linux: FadeUpwardsPageTransitionsBuilder(),
+            },
+          ),
           inputDecorationTheme: const InputDecorationTheme(
             filled: true,
             fillColor: Colors.white,

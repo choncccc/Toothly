@@ -4,10 +4,14 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'package:mime/mime.dart';
+
 import '../data/clinical_checklist.dart';
 import '../services/local/clinical_store.dart';
 import '../services/local/profile_store.dart';
 import '../viewmodel/home_viewmodel.dart';
+import '../widgets/animations.dart';
+import 'file_preview_view.dart';
 
 class ClinicalCasesView extends StatefulWidget {
   const ClinicalCasesView({super.key});
@@ -201,7 +205,10 @@ class _ClinicalCasesViewState extends State<ClinicalCasesView> {
               padding: const EdgeInsets.all(16),
               itemCount: rows.length,
               separatorBuilder: (_, __) => const SizedBox(height: 10),
-              itemBuilder: (_, i) => rows[i],
+              itemBuilder: (_, i) => FadeSlideIn(
+                delay: Duration(milliseconds: (i * 45).clamp(0, 400)),
+                child: rows[i],
+              ),
             ),
           );
         },
@@ -319,12 +326,17 @@ class _Header extends StatelessWidget {
           const SizedBox(height: 12),
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: LinearProgressIndicator(
-              value: pct,
-              minHeight: 8,
-              backgroundColor: Colors.white24,
-              valueColor:
-                  const AlwaysStoppedAnimation<Color>(Color(0xFFf7e4b0)),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: pct),
+              duration: const Duration(milliseconds: 600),
+              curve: Curves.easeOutCubic,
+              builder: (_, value, __) => LinearProgressIndicator(
+                value: value,
+                minHeight: 8,
+                backgroundColor: Colors.white24,
+                valueColor:
+                    const AlwaysStoppedAnimation<Color>(Color(0xFFf7e4b0)),
+              ),
             ),
           ),
         ],
@@ -377,13 +389,12 @@ class _ChecklistTileState extends State<_ChecklistTile> {
     });
   }
 
-  Future<void> _toggle(bool? v) async {
-    if (v == null || _saving) return;
+  /// Persists the checked state and notifies the parent so progress updates.
+  /// Driven by file attachments — never by a direct user tap on the checkbox.
+  Future<void> _setChecked(bool v) async {
+    if (_checked == v) return;
     final prev = _checked;
-    setState(() {
-      _checked = v;
-      _saving = true;
-    });
+    setState(() => _checked = v);
     try {
       await widget.store.setChecked(
         level: widget.level,
@@ -398,8 +409,6 @@ class _ChecklistTileState extends State<_ChecklistTile> {
           SnackBar(content: Text('Save failed: $e')),
         );
       }
-    } finally {
-      if (mounted) setState(() => _saving = false);
     }
   }
 
@@ -421,8 +430,10 @@ class _ChecklistTileState extends State<_ChecklistTile> {
         sourceFile: File(path),
         displayName: picked.name,
       );
-      // Attaching a file marks a clinical case as completed.
-      await ProfileStore.instance.incrementCasesCompleted();
+      // Attaching the first file auto-checks the item and adds to progress.
+      if (!_checked) {
+        await _setChecked(true);
+      }
       if (mounted) {
         await context.read<HomeViewmodel>().refresh();
       }
@@ -461,17 +472,12 @@ class _ChecklistTileState extends State<_ChecklistTile> {
   }
 
   Future<void> _openFile(ClinicalFile f) async {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Text(f.displayName),
-        content: SelectableText(f.filePath),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-        ],
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => FilePreviewView(
+          filePath: f.filePath,
+          displayName: f.displayName,
+        ),
       ),
     );
   }
@@ -479,6 +485,13 @@ class _ChecklistTileState extends State<_ChecklistTile> {
   Future<void> _deleteFile(ClinicalFile f) async {
     try {
       await widget.store.deleteUpload(f);
+      // Checked state follows attachments: unchecking when the last file goes.
+      final remaining = await _loadFiles();
+      if (remaining.isEmpty) {
+        await _setChecked(false);
+        // Keep the dashboard "Completed" stat in sync after unchecking.
+        if (mounted) await context.read<HomeViewmodel>().refresh();
+      }
       _refreshFiles();
     } catch (e) {
       if (mounted) {
@@ -503,10 +516,20 @@ class _ChecklistTileState extends State<_ChecklistTile> {
         children: [
           Row(
             children: [
-              Checkbox(
-                value: _checked,
-                onChanged: _saving ? null : _toggle,
-                activeColor: const Color(0xFF8F6BFF),
+              // Read-only: the box reflects attachment state and cannot be
+              // toggled by tapping — attach a file to complete the item.
+              Tooltip(
+                message: 'Attach a file to complete this item',
+                child: IgnorePointer(
+                  child: PopOnChange(
+                    trigger: _checked,
+                    child: Checkbox(
+                      value: _checked,
+                      onChanged: (_) {},
+                      activeColor: const Color(0xFF8F6BFF),
+                    ),
+                  ),
+                ),
               ),
               Expanded(
                 child: Column(
@@ -543,17 +566,24 @@ class _ChecklistTileState extends State<_ChecklistTile> {
               IconButton(
                 tooltip: _uploadsExpanded ? 'Hide files' : 'Show files',
                 onPressed: _toggleUploads,
-                icon: Icon(
-                  _uploadsExpanded
-                      ? Icons.expand_less
-                      : Icons.expand_more,
-                  color: const Color(0xFF5D4B8A),
+                icon: AnimatedRotation(
+                  turns: _uploadsExpanded ? 0.5 : 0,
+                  duration: const Duration(milliseconds: 250),
+                  child: const Icon(
+                    Icons.expand_more,
+                    color: Color(0xFF5D4B8A),
+                  ),
                 ),
               ),
             ],
           ),
-          if (_uploadsExpanded)
-            Padding(
+          AnimatedSize(
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+            alignment: Alignment.topCenter,
+            child: !_uploadsExpanded
+                ? const SizedBox(width: double.infinity)
+                : Padding(
               padding: const EdgeInsets.only(left: 8, right: 8, bottom: 4),
               child: FutureBuilder<List<ClinicalFile>>(
                 future: _uploadsFuture,
@@ -584,8 +614,7 @@ class _ChecklistTileState extends State<_ChecklistTile> {
                         ListTile(
                           dense: true,
                           contentPadding: EdgeInsets.zero,
-                          leading: const Icon(Icons.insert_drive_file,
-                              color: Color(0xFF8F6BFF)),
+                          leading: _FileThumb(file: e),
                           title: Text(e.displayName,
                               style: const TextStyle(fontSize: 13)),
                           subtitle: Text(
@@ -604,6 +633,7 @@ class _ChecklistTileState extends State<_ChecklistTile> {
                 },
               ),
             ),
+          ),
         ],
       ),
     );
@@ -613,6 +643,54 @@ class _ChecklistTileState extends State<_ChecklistTile> {
     final local = dt.toLocal();
     return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} '
         '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
+  }
+}
+
+/// Small leading preview for an attached file: a thumbnail for images, or a
+/// type-appropriate icon for everything else.
+class _FileThumb extends StatelessWidget {
+  final ClinicalFile file;
+  const _FileThumb({required this.file});
+
+  @override
+  Widget build(BuildContext context) {
+    final mime = lookupMimeType(file.filePath) ?? '';
+    if (mime.startsWith('image/')) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.file(
+          File(file.filePath),
+          width: 40,
+          height: 40,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => const _ThumbIcon(Icons.broken_image),
+        ),
+      );
+    }
+    final icon = mime == 'application/pdf'
+        ? Icons.picture_as_pdf
+        : mime.startsWith('video/')
+            ? Icons.videocam
+            : Icons.insert_drive_file;
+    return _ThumbIcon(icon);
+  }
+}
+
+class _ThumbIcon extends StatelessWidget {
+  final IconData icon;
+  const _ThumbIcon(this.icon);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: const Color(0xFFE6E1F5),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Icon(icon, color: const Color(0xFF8F6BFF), size: 20),
+    );
   }
 }
 
