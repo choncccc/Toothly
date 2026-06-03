@@ -558,22 +558,29 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     return legacy.isGranted;
   }
 
+  static const String _casesFolderName = 'Toothly Cases';
+
   Future<String> _writePdfBytes(Uint8List bytes, String fileName) async {
     if (Platform.isAndroid) {
-      final downloads = Directory('/storage/emulated/0/Download');
+      final casesDir =
+          Directory('/storage/emulated/0/Documents/$_casesFolderName');
       try {
-        if (!downloads.existsSync()) {
-          downloads.createSync(recursive: true);
+        if (!casesDir.existsSync()) {
+          casesDir.createSync(recursive: true);
         }
-        final f = File('${downloads.path}/$fileName');
+        final f = File('${casesDir.path}/$fileName');
         await f.writeAsBytes(bytes);
         return f.path;
       } catch (_) {
         // fall through to app-internal fallback
       }
     }
-    final dir = await getApplicationDocumentsDirectory();
-    final f = File('${dir.path}/$fileName');
+    final docs = await getApplicationDocumentsDirectory();
+    final casesDir = Directory('${docs.path}/$_casesFolderName');
+    if (!casesDir.existsSync()) {
+      casesDir.createSync(recursive: true);
+    }
+    final f = File('${casesDir.path}/$fileName');
     await f.writeAsBytes(bytes);
     return f.path;
   }
@@ -646,7 +653,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
           '${widget.title.replaceAll(' ', '_')}_${DateTime.now().millisecondsSinceEpoch}.pdf';
 
       await _ensureStoragePermission();
-      final savedPath = await _writePdfBytes(pdfBytes, fileName);
+      await _writePdfBytes(pdfBytes, fileName);
 
       // Case is complete — drop any leftover draft.
       await _clearDraft();
@@ -655,9 +662,9 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: const Color(0xFF5D4B8A),
-            content: Text(
-              'Saved to: $savedPath',
-              style: const TextStyle(color: Colors.white),
+            content: const Text(
+              'Case saved successfully',
+              style: TextStyle(color: Colors.white),
             ),
             duration: const Duration(seconds: 4),
           ),

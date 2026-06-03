@@ -1,0 +1,49 @@
+workflows:
+  ios-testflight:
+    name: iOS TestFlight (Beta)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      groups:
+        - app_store_credentials   # set in Codemagic UI: see notes below
+      vars:
+        BUNDLE_ID: "com.toothly.app"
+        APP_STORE_APPLE_ID: 0000000000   # <- replace with the Apple ID number of the app in App Store Connect
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.toothly.app
+    scripts:
+      - name: Set up code signing
+        script: |
+          xcode-project use-profiles
+      - name: Get Flutter packages
+        script: |
+          flutter pub get
+      - name: Install CocoaPods dependencies
+        script: |
+          find . -name "Podfile" -execdir pod install \;
+      - name: Flutter analyze
+        script: |
+          flutter analyze || true
+      - name: Increment build number
+        script: |
+          BUILD_NUMBER=$(($(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID") + 1))
+          echo "Using build number $BUILD_NUMBER"
+          flutter build ipa --release \
+            --build-name=1.0.0 \
+            --build-number=$BUILD_NUMBER \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - flutter_drive.log
+    publishing:
+      app_store_connect:
+        auth: integration          # uses the App Store Connect API key configured in Codemagic
+        submit_to_testflight: true
+        # Internal testers get the build immediately. To auto-distribute to an
+        # external group, uncomment and name your group (requires one-time Beta App Review):
+        # beta_groups:
+        #   - "External Testers"
