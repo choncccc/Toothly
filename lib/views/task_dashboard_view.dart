@@ -36,14 +36,6 @@ class _TaskDashboardPageState extends State<TaskDashboardPage> {
     return 'Good evening';
   }
 
-  String _initials(String name) {
-    final cleaned = name.trim();
-    if (cleaned.isEmpty) return 'U';
-    final parts = cleaned.split(RegExp(r'\s+'));
-    if (parts.length == 1) return parts[0][0].toUpperCase();
-    return (parts.first[0] + parts.last[0]).toUpperCase();
-  }
-
   String _formatApptDate(DateTime date, String? time) {
     const months = [
       'Jan',
@@ -75,7 +67,7 @@ class _TaskDashboardPageState extends State<TaskDashboardPage> {
   Widget build(BuildContext context) {
     final controller = context.watch<HomeViewmodel>();
     final apptVM = context.watch<AppointmentsViewModel>();
-    final displayName = ('${controller.user_type} ${controller.fName}').trim();
+    final displayName = controller.displayName;
     final clinicLevel = controller.clinicLevel;
     final levelItems = clinicLevel.isEmpty
         ? const <ChecklistItem>[]
@@ -130,7 +122,7 @@ class _TaskDashboardPageState extends State<TaskDashboardPage> {
               child: _GreetingHero(
                 greeting: _greetingPhrase(),
                 displayName: displayName.isEmpty ? 'there' : displayName,
-                initials: _initials(controller.fName),
+                initials: controller.userCode.isEmpty ? 'U' : controller.userCode,
                 clinicLevel: clinicLevel,
                 avatarPath: controller.avatarPath,
               ),

@@ -9,9 +9,8 @@ import '../services/local/clinical_store.dart';
 class HomeViewmodel extends ChangeNotifier {
   final _store = ProfileStore.instance;
 
-  String user_type = 'Doc';
-  String fName = 'Guest';
-  String lName = '';
+  String userCode = '';
+  String displayName = 'Guest';
   String? avatarPath;
   String clinicLevel = '';
   int casesCompleted = 0;
@@ -33,13 +32,12 @@ class HomeViewmodel extends ChangeNotifier {
   Future<void> refresh() => _loadUserData();
 
   Future<void> _loadUserData() async {
-    final first = _store.firstName;
-    fName = first.isEmpty ? 'Guest' : first;
-    lName = _store.lastName;
+    userCode = _store.userCode;
+    final name = _store.displayName;
+    displayName = name.isEmpty ? 'Guest' : name;
     avatarPath = _store.avatarPath;
     clinicLevel = _store.clinicLevel;
     casesCompleted = await ClinicalStore.instance.countAllChecked();
-    user_type = 'Doc';
     notifyListeners();
   }
 

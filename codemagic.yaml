@@ -8,10 +8,10 @@ workflows:
       xcode: latest
       cocoapods: default
       groups:
-        - app_store_credentials   # set in Codemagic UI: see notes below
+        - app_store_credentials # set in Codemagic UI: see notes below
       vars:
         BUNDLE_ID: "com.toothly.app"
-        APP_STORE_APPLE_ID: 0000000000   # <- replace with the Apple ID number of the app in App Store Connect
+        APP_STORE_APPLE_ID: 0000000000 # TODO: replace with your apps apple id
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.toothly.app
@@ -41,7 +41,7 @@ workflows:
       - flutter_drive.log
     publishing:
       app_store_connect:
-        auth: integration          # uses the App Store Connect API key configured in Codemagic
+        auth: integration # uses the App Store Connect API key configured in Codemagic
         submit_to_testflight: true
         # Internal testers get the build immediately. To auto-distribute to an
         # external group, uncomment and name your group (requires one-time Beta App Review):

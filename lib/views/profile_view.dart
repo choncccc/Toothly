@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
@@ -26,32 +27,20 @@ class ProfileView extends StatefulWidget {
 
 class _ProfileViewState extends State<ProfileView> {
   final _store = ProfileStore.instance;
-  final _fNameCtl = TextEditingController();
-  final _lNameCtl = TextEditingController();
+  final _codeCtl = TextEditingController();
   bool _savingAvatar = false;
   bool _savingProfile = false;
 
   @override
   void initState() {
     super.initState();
-    final home = context.read<HomeViewmodel>();
-    _fNameCtl.text = home.fName == 'Guest' ? '' : home.fName;
-    _lNameCtl.text = home.lName;
+    _codeCtl.text = context.read<HomeViewmodel>().userCode;
   }
 
   @override
   void dispose() {
-    _fNameCtl.dispose();
-    _lNameCtl.dispose();
+    _codeCtl.dispose();
     super.dispose();
-  }
-
-  String _initials(String name) {
-    final cleaned = name.trim();
-    if (cleaned.isEmpty) return 'U';
-    final parts = cleaned.split(RegExp(r'\s+'));
-    if (parts.length == 1) return parts[0][0].toUpperCase();
-    return (parts.first[0] + parts.last[0]).toUpperCase();
   }
 
   Future<void> _changeAvatar() async {
@@ -90,13 +79,13 @@ class _ProfileViewState extends State<ProfileView> {
     }
   }
 
+  // ignore: unused_element  // TEMP: kept for when user-code editing returns.
   Future<void> _saveProfile() async {
     if (_savingProfile) return;
-    final fName = _fNameCtl.text.trim();
-    final lName = _lNameCtl.text.trim();
-    if (fName.isEmpty || lName.isEmpty) {
+    final code = _codeCtl.text.trim();
+    if (code.length != 2) {
       Fluttertoast.showToast(
-        msg: 'Name fields cannot be empty',
+        msg: 'Enter a 2-digit user code',
         backgroundColor: Colors.red.shade700,
         textColor: Colors.white,
       );
@@ -104,7 +93,7 @@ class _ProfileViewState extends State<ProfileView> {
     }
     setState(() => _savingProfile = true);
     try {
-      await _store.setName(firstName: fName, lastName: lName);
+      await _store.setUserCode(code);
       if (!mounted) return;
       await context.read<HomeViewmodel>().refresh();
       Fluttertoast.showToast(
@@ -148,14 +137,14 @@ class _ProfileViewState extends State<ProfileView> {
         children: [
           _AvatarHeader(
             avatarPath: home.avatarPath,
-            initials: _initials(home.fName),
+            initials: home.userCode.isEmpty ? 'U' : home.userCode,
             saving: _savingAvatar,
             onTap: _changeAvatar,
           ),
           const SizedBox(height: 20),
           Center(
             child: Text(
-              '${home.user_type} ${home.fName}'.trim(),
+              home.displayName,
               style: const TextStyle(
                 color: _primary,
                 fontSize: 20,
@@ -178,52 +167,61 @@ class _ProfileViewState extends State<ProfileView> {
             value: home.casesCompleted.toString(),
             icon: Icons.assignment_turned_in_outlined,
           ),
-          const SizedBox(height: 24),
-          const Text(
-            'Edit details',
-            style: TextStyle(
-              color: _primary,
-              fontWeight: FontWeight.bold,
-              fontFamily: 'Roboto',
-              fontSize: 15,
-            ),
-          ),
-          const SizedBox(height: 10),
-          _LabeledField(label: 'First name', controller: _fNameCtl),
-          const SizedBox(height: 10),
-          _LabeledField(label: 'Last name', controller: _lNameCtl),
-          const SizedBox(height: 18),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _savingProfile ? null : _saveProfile,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _purpleDeep,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
-                ),
-              ),
-              child: _savingProfile
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Text(
-                      'Save changes',
-                      style: TextStyle(
-                        fontFamily: 'Roboto',
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                      ),
-                    ),
-            ),
-          ),
+          // TEMP: user-code editing hidden during initial testing — the code is
+          // client-assigned and set during onboarding. Restore this block to
+          // allow editing it from the profile again.
+          // const SizedBox(height: 24),
+          // const Text(
+          //   'Edit details',
+          //   style: TextStyle(
+          //     color: _primary,
+          //     fontWeight: FontWeight.bold,
+          //     fontFamily: 'Roboto',
+          //     fontSize: 15,
+          //   ),
+          // ),
+          // const SizedBox(height: 10),
+          // _LabeledField(
+          //   label: 'User code',
+          //   controller: _codeCtl,
+          //   keyboardType: TextInputType.number,
+          //   inputFormatters: [
+          //     FilteringTextInputFormatter.digitsOnly,
+          //     LengthLimitingTextInputFormatter(2),
+          //   ],
+          // ),
+          // const SizedBox(height: 18),
+          // SizedBox(
+          //   width: double.infinity,
+          //   child: ElevatedButton(
+          //     onPressed: _savingProfile ? null : _saveProfile,
+          //     style: ElevatedButton.styleFrom(
+          //       backgroundColor: _purpleDeep,
+          //       foregroundColor: Colors.white,
+          //       padding: const EdgeInsets.symmetric(vertical: 14),
+          //       shape: RoundedRectangleBorder(
+          //         borderRadius: BorderRadius.circular(14),
+          //       ),
+          //     ),
+          //     child: _savingProfile
+          //         ? const SizedBox(
+          //             width: 18,
+          //             height: 18,
+          //             child: CircularProgressIndicator(
+          //               strokeWidth: 2,
+          //               color: Colors.white,
+          //             ),
+          //           )
+          //         : const Text(
+          //             'Save changes',
+          //             style: TextStyle(
+          //               fontFamily: 'Roboto',
+          //               fontWeight: FontWeight.bold,
+          //               fontSize: 15,
+          //             ),
+          //           ),
+          //   ),
+          // ),
         ],
       ),
     );
@@ -383,10 +381,20 @@ class _InfoTile extends StatelessWidget {
   }
 }
 
+// ignore: unused_element  // TEMP: used by the hidden user-code editing block.
 class _LabeledField extends StatelessWidget {
   final String label;
   final TextEditingController controller;
-  const _LabeledField({required this.label, required this.controller});
+  final TextInputType? keyboardType;
+  final List<TextInputFormatter>? inputFormatters;
+  const _LabeledField({
+    required this.label,
+    required this.controller,
+    // ignore: unused_element_parameter
+    this.keyboardType,
+    // ignore: unused_element_parameter
+    this.inputFormatters,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -404,6 +412,8 @@ class _LabeledField extends StatelessWidget {
         const SizedBox(height: 6),
         TextField(
           controller: controller,
+          keyboardType: keyboardType,
+          inputFormatters: inputFormatters,
           decoration: InputDecoration(
             filled: true,
             fillColor: Colors.white,

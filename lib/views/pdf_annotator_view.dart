@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'dart:io';
 
@@ -7,7 +6,9 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import '../data/pdf_locked_regions.dart';
 import '../services/local/draft_store.dart';
+import '../services/local/profile_store.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -72,10 +73,17 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
   final Map<int, List<_TextLabel>> _textLabels = {};
   final Map<int, GlobalKey> _repaintKeys = {};
   final Map<int, TransformationController> _zoomControllers = {};
+  // Rendered on-screen size of each page box, used to map normalised locked
+  // regions to local pixel coordinates for hit-testing.
+  final Map<int, Size> _pageSizes = {};
   final ScrollController _scrollController = ScrollController();
 
   _Stroke? _active;
   int _drawingPage = -1;
+  // Auto-generated, user-scoped case number stamped into the locked patient
+  // field on page 1 (e.g. 101 for user 01). Allocated on open, kept in the
+  // draft so it survives "continue later".
+  int? _caseNumber;
   Color _color = Colors.blue;
   double _penWidth = 3.0;
   double _textSize = 16.0;
@@ -141,11 +149,119 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
           _pageAspectRatios.addAll(ratios);
         });
         await _maybeRestoreDraft();
+        // A restored draft carries its own case number. Otherwise, for forms
+        // that have a patient field, ask whether this is a new patient (reserve
+        // a fresh number) or an existing one (reuse a number — e.g. when a
+        // patient needs more than one form).
+        if (_caseNumber == null && _hasPatientField && mounted) {
+          await _choosePatientCase();
+        }
       }
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     }
   }
+
+  /// Whether this form has a patient field to number/stamp on page 1.
+  bool get _hasPatientField =>
+      caseStampAnchorForPage(widget.editablePdfPath, 1) != null;
+
+  /// The text stamped into the patient field, e.g. `Case No. 101`.
+  String get _caseLabel => _caseNumber == null ? '' : 'Case No. $_caseNumber';
+
+  /// Decides the case number for a brand-new case: reuse an existing patient's
+  /// number, or reserve the next one.
+  Future<void> _choosePatientCase() async {
+    final store = ProfileStore.instance;
+    final existing = store.existingCaseNumbers;
+    int? chosen;
+    if (existing.isEmpty) {
+      // No prior patients — nothing to reuse, just take the next number.
+      chosen = await store.allocateCaseNumber();
+    } else {
+      final isNew = await _askNewPatient();
+      if (isNew == false) {
+        chosen = await _pickExistingPatient(existing);
+      }
+      // "New patient", or the picker was dismissed: reserve a fresh number.
+      chosen ??= await store.allocateCaseNumber();
+    }
+    if (mounted) setState(() => _caseNumber = chosen);
+  }
+
+  Future<bool?> _askNewPatient() => showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: const Color(0xFF2D2D44),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      title: const Text(
+        'Is this for a new patient?',
+        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      ),
+      content: const Text(
+        'Choose "New patient" to generate a new case number, or "Existing '
+        'patient" to reuse a number when a patient needs more than one form.',
+        style: TextStyle(color: Colors.white70, height: 1.4),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text(
+            'Existing patient',
+            style: TextStyle(color: Colors.white70),
+          ),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF8F6BFF),
+          ),
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('New patient'),
+        ),
+      ],
+    ),
+  );
+
+  Future<int?> _pickExistingPatient(List<int> numbers) => showDialog<int>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: const Color(0xFF2D2D44),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      title: const Text(
+        'Select patient',
+        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      ),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: ListView.builder(
+          shrinkWrap: true,
+          itemCount: numbers.length,
+          itemBuilder: (_, i) {
+            // Newest first.
+            final n = numbers[numbers.length - 1 - i];
+            return ListTile(
+              leading: const Icon(
+                Icons.badge_outlined,
+                color: Color(0xFF8F6BFF),
+              ),
+              title: Text(
+                'Case No. $n',
+                style: const TextStyle(color: Colors.white),
+              ),
+              onTap: () => Navigator.pop(ctx, n),
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
+        ),
+      ],
+    ),
+  );
 
   // ── Draft persistence ─────────────────────────────────────────────────────
 
@@ -163,25 +279,29 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     final strokes = <String, dynamic>{};
     _strokes.forEach((page, list) {
       strokes['$page'] = list
-          .map((s) => {
-                'color': _encodeColor(s.color),
-                'width': s.width,
-                'points': s.points
-                    .map((o) => [o.dx, o.dy])
-                    .toList(growable: false),
-              })
+          .map(
+            (s) => {
+              'color': _encodeColor(s.color),
+              'width': s.width,
+              'points': s.points
+                  .map((o) => [o.dx, o.dy])
+                  .toList(growable: false),
+            },
+          )
           .toList();
     });
     final labels = <String, dynamic>{};
     _textLabels.forEach((page, list) {
       labels['$page'] = list
-          .map((l) => {
-                'x': l.position.dx,
-                'y': l.position.dy,
-                'text': l.text,
-                'color': _encodeColor(l.color),
-                'fontSize': l.fontSize,
-              })
+          .map(
+            (l) => {
+              'x': l.position.dx,
+              'y': l.position.dy,
+              'text': l.text,
+              'color': _encodeColor(l.color),
+              'fontSize': l.fontSize,
+            },
+          )
           .toList();
     });
     return {
@@ -189,6 +309,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       'title': widget.title,
       'editablePdfPath': widget.editablePdfPath,
       'companionPdfPaths': widget.companionPdfPaths,
+      'caseNumber': _caseNumber,
       'strokes': strokes,
       'labels': labels,
     };
@@ -197,6 +318,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
   void _applyDraft(Map<String, dynamic> data) {
     final strokesJson = (data['strokes'] as Map?)?.cast<String, dynamic>();
     final labelsJson = (data['labels'] as Map?)?.cast<String, dynamic>();
+    _caseNumber = (data['caseNumber'] as num?)?.toInt();
     _strokes.clear();
     _textLabels.clear();
     if (strokesJson != null) {
@@ -253,8 +375,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
           ),
           title: const Text(
             'Continue draft?',
-            style:
-                TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
           ),
           content: const Text(
             'You have unsaved annotations for this case. Restore them?',
@@ -314,19 +435,17 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not save draft: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Could not save draft: $e')));
     }
   }
 
   GlobalKey _keyFor(int page) =>
       _repaintKeys.putIfAbsent(page, () => GlobalKey());
 
-  TransformationController _zoomFor(int page) => _zoomControllers.putIfAbsent(
-    page,
-    () => TransformationController(),
-  );
+  TransformationController _zoomFor(int page) =>
+      _zoomControllers.putIfAbsent(page, () => TransformationController());
 
   double _scaleFor(int page) {
     final c = _zoomControllers[page];
@@ -382,17 +501,69 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     setState(() => c.value = matrix);
   }
 
-  void _startStroke(DragStartDetails d, int page) => setState(() {
-    _drawingPage = page;
-    _active = _Stroke(
-      [d.localPosition],
-      _erasing ? Colors.white : _color,
-      _erasing ? 22.0 : _penWidth,
-    );
-  });
+  // ── Locked (read-only) regions ─────────────────────────────────────────────
+  // Patient-identifying field on page 1 that must stay un-annotated.
+
+  List<Rect> _lockedPixelRects(int page) {
+    final size = _pageSizes[page];
+    if (size == null) return const [];
+    final norm = lockedRegionsForPage(widget.editablePdfPath, page);
+    if (norm.isEmpty) return const [];
+    return norm
+        .map(
+          (r) => Rect.fromLTRB(
+            r.left * size.width,
+            r.top * size.height,
+            r.right * size.width,
+            r.bottom * size.height,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  bool _isLocked(int page, Offset localPos) {
+    for (final r in _lockedPixelRects(page)) {
+      if (r.contains(localPos)) return true;
+    }
+    return false;
+  }
+
+  void _notifyLocked() {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          backgroundColor: Color(0xFF5D4B8A),
+          duration: Duration(seconds: 2),
+          content: Text(
+            'Patient field is locked and can’t be edited.',
+            style: TextStyle(color: Colors.white),
+          ),
+        ),
+      );
+  }
+
+  void _startStroke(DragStartDetails d, int page) {
+    // Block drawing/erasing that begins inside the protected patient field.
+    if (_isLocked(page, d.localPosition)) {
+      _notifyLocked();
+      return;
+    }
+    setState(() {
+      _drawingPage = page;
+      _active = _Stroke(
+        [d.localPosition],
+        _erasing ? Colors.white : _color,
+        _erasing ? 22.0 : _penWidth,
+      );
+    });
+  }
 
   void _updateStroke(DragUpdateDetails d, int page) {
     if (_active == null || _drawingPage != page) return;
+    // Skip points that wander into the protected field so strokes can't bleed
+    // into it from outside.
+    if (_isLocked(page, d.localPosition)) return;
     setState(() {
       _active = _Stroke(
         [..._active!.points, d.localPosition],
@@ -410,10 +581,12 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       _active = null;
       _drawingPage = -1;
     });
-    _pushAction(_Action(
-      undo: () => _strokesFor(page).remove(added),
-      redo: () => _strokesFor(page).add(added),
-    ));
+    _pushAction(
+      _Action(
+        undo: () => _strokesFor(page).remove(added),
+        redo: () => _strokesFor(page).add(added),
+      ),
+    );
   }
 
   void _pushAction(_Action a) {
@@ -443,13 +616,10 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF2D2D44),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
         title: const Text(
           'Clear page?',
-          style:
-              TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
         ),
         content: Text(
           'Remove all annotations from page $page?',
@@ -458,8 +628,10 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel',
-                style: TextStyle(color: Colors.white70)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: Colors.white70),
+            ),
           ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
@@ -476,16 +648,18 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       _strokes[page] = [];
       _textLabels[page] = [];
     });
-    _pushAction(_Action(
-      undo: () {
-        _strokes[page] = List<_Stroke>.from(prevStrokes);
-        _textLabels[page] = List<_TextLabel>.from(prevLabels);
-      },
-      redo: () {
-        _strokes[page] = [];
-        _textLabels[page] = [];
-      },
-    ));
+    _pushAction(
+      _Action(
+        undo: () {
+          _strokes[page] = List<_Stroke>.from(prevStrokes);
+          _textLabels[page] = List<_TextLabel>.from(prevLabels);
+        },
+        redo: () {
+          _strokes[page] = [];
+          _textLabels[page] = [];
+        },
+      ),
+    );
   }
 
   Future<void> _addTextLabel(int page, Offset position) async {
@@ -508,10 +682,12 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
         _textSize = result.fontSize;
         _textLabelsFor(page).add(label);
       });
-      _pushAction(_Action(
-        undo: () => _textLabelsFor(page).remove(label),
-        redo: () => _textLabelsFor(page).add(label),
-      ));
+      _pushAction(
+        _Action(
+          undo: () => _textLabelsFor(page).remove(label),
+          redo: () => _textLabelsFor(page).add(label),
+        ),
+      );
     }
   }
 
@@ -530,10 +706,12 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       final idx = list.indexOf(label);
       if (idx == -1) return;
       setState(() => list.removeAt(idx));
-      _pushAction(_Action(
-        undo: () => _textLabelsFor(page).insert(idx, label),
-        redo: () => _textLabelsFor(page).remove(label),
-      ));
+      _pushAction(
+        _Action(
+          undo: () => _textLabelsFor(page).insert(idx, label),
+          redo: () => _textLabelsFor(page).remove(label),
+        ),
+      );
     } else {
       setState(() {
         label.text = result.text;
@@ -562,8 +740,9 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
 
   Future<String> _writePdfBytes(Uint8List bytes, String fileName) async {
     if (Platform.isAndroid) {
-      final casesDir =
-          Directory('/storage/emulated/0/Documents/$_casesFolderName');
+      final casesDir = Directory(
+        '/storage/emulated/0/Documents/$_casesFolderName',
+      );
       try {
         if (!casesDir.existsSync()) {
           casesDir.createSync(recursive: true);
@@ -672,9 +851,9 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Save failed: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Save failed: $e')));
       }
     } finally {
       if (mounted) setState(() => _saving = false);
@@ -779,11 +958,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                 tooltip: 'Pan & scroll',
               ),
               const SizedBox(width: 8),
-              Container(
-                width: 1,
-                height: 24,
-                color: Colors.white24,
-              ),
+              Container(width: 1, height: 24, color: Colors.white24),
               const SizedBox(width: 8),
               _ToolbarIcon(
                 icon: Icons.zoom_out,
@@ -845,8 +1020,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                 ),
                 const SizedBox(width: 4),
                 if (_mode == _Mode.text) ...[
-                  const Icon(Icons.format_size,
-                      color: Colors.white, size: 18),
+                  const Icon(Icons.format_size, color: Colors.white, size: 18),
                   Expanded(
                     child: Slider(
                       value: _textSize,
@@ -861,8 +1035,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                     width: 28,
                     child: Text(
                       _textSize.toStringAsFixed(0),
-                      style:
-                          const TextStyle(color: Colors.white, fontSize: 12),
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
                       textAlign: TextAlign.center,
                     ),
                   ),
@@ -872,8 +1045,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                     child: Container(
                       padding: const EdgeInsets.all(4),
                       decoration: BoxDecoration(
-                        color:
-                            _erasing ? Colors.white24 : Colors.transparent,
+                        color: _erasing ? Colors.white24 : Colors.transparent,
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: const Icon(
@@ -950,6 +1122,29 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     );
   }
 
+  /// The case-number text positioned over the locked patient field. Lives
+  /// inside the page's RepaintBoundary so it is baked into the saved PDF.
+  Widget _buildCaseStamp(int page) {
+    if (_caseNumber == null) return const SizedBox.shrink();
+    final anchor = caseStampAnchorForPage(widget.editablePdfPath, page);
+    final size = _pageSizes[page];
+    if (anchor == null || size == null) return const SizedBox.shrink();
+    final fontSize = anchor.height * size.height * 1.25;
+    return Positioned(
+      left: anchor.x * size.width,
+      top: anchor.centerY * size.height - fontSize * 0.66,
+      child: Text(
+        _caseLabel,
+        style: TextStyle(
+          color: Colors.black,
+          fontSize: fontSize,
+          fontWeight: FontWeight.w600,
+          height: 1.0,
+        ),
+      ),
+    );
+  }
+
   Widget _buildPage(int page) {
     final imageBytes = _pageImages[page];
     if (imageBytes == null) return const SizedBox.shrink();
@@ -974,94 +1169,145 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                 scaleEnabled: true,
                 minScale: 1.0,
                 maxScale: 5.0,
-                child: RepaintBoundary(
-                  key: _keyFor(page),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      Image.memory(imageBytes, fit: BoxFit.fill),
-                      // Draw / tap overlay (below labels so labels stay interactive)
-                      Positioned.fill(
-                        child: Listener(
-                          onPointerSignal: (event) {
-                            if (event is PointerScrollEvent &&
-                                HardwareKeyboard
-                                    .instance.isControlPressed) {
-                              final factor =
-                                  event.scrollDelta.dy < 0 ? 1.15 : 1 / 1.15;
-                              _zoomPageBy(page, factor, event.localPosition);
-                            }
-                          },
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onPanStart: _mode == _Mode.draw
-                                ? (d) => _startStroke(d, page)
-                                : null,
-                            onPanUpdate: _mode == _Mode.draw
-                                ? (d) => _updateStroke(d, page)
-                                : null,
-                            onPanEnd: _mode == _Mode.draw
-                                ? (d) => _endStroke(d, page)
-                                : null,
-                            onTapUp: _mode == _Mode.text
-                                ? (d) => _addTextLabel(page, d.localPosition)
-                                : null,
-                            child: CustomPaint(
-                              painter: _DrawingPainter(
-                                strokes: _strokesFor(page),
-                                active:
-                                    _drawingPage == page ? _active : null,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    _pageSizes[page] = Size(
+                      constraints.maxWidth,
+                      constraints.maxHeight,
+                    );
+                    return Stack(
+                      children: [
+                        RepaintBoundary(
+                          key: _keyFor(page),
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              Image.memory(imageBytes, fit: BoxFit.fill),
+                              // Auto-stamped case number (part of the export).
+                              _buildCaseStamp(page),
+                              // Draw / tap overlay (below labels so labels stay interactive)
+                              Positioned.fill(
+                                child: Listener(
+                                  onPointerSignal: (event) {
+                                    if (event is PointerScrollEvent &&
+                                        HardwareKeyboard
+                                            .instance
+                                            .isControlPressed) {
+                                      final factor = event.scrollDelta.dy < 0
+                                          ? 1.15
+                                          : 1 / 1.15;
+                                      _zoomPageBy(
+                                        page,
+                                        factor,
+                                        event.localPosition,
+                                      );
+                                    }
+                                  },
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onPanStart: _mode == _Mode.draw
+                                        ? (d) => _startStroke(d, page)
+                                        : null,
+                                    onPanUpdate: _mode == _Mode.draw
+                                        ? (d) => _updateStroke(d, page)
+                                        : null,
+                                    onPanEnd: _mode == _Mode.draw
+                                        ? (d) => _endStroke(d, page)
+                                        : null,
+                                    onTapUp: _mode == _Mode.text
+                                        ? (d) {
+                                            if (_isLocked(
+                                              page,
+                                              d.localPosition,
+                                            )) {
+                                              _notifyLocked();
+                                              return;
+                                            }
+                                            _addTextLabel(
+                                              page,
+                                              d.localPosition,
+                                            );
+                                          }
+                                        : null,
+                                    child: CustomPaint(
+                                      painter: _DrawingPainter(
+                                        strokes: _strokesFor(page),
+                                        active: _drawingPage == page
+                                            ? _active
+                                            : null,
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
+                              // Text labels on top so they can be tapped/dragged
+                              for (final label in _textLabelsFor(page))
+                                Positioned(
+                                  key: ObjectKey(label),
+                                  left: label.position.dx,
+                                  top: label.position.dy,
+                                  child: GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: () => _editTextLabel(page, label),
+                                    onLongPress: () {
+                                      final list = _textLabelsFor(page);
+                                      final idx = list.indexOf(label);
+                                      if (idx == -1) return;
+                                      setState(() => list.removeAt(idx));
+                                      _pushAction(
+                                        _Action(
+                                          undo: () => _textLabelsFor(
+                                            page,
+                                          ).insert(idx, label),
+                                          redo: () => _textLabelsFor(
+                                            page,
+                                          ).remove(label),
+                                        ),
+                                      );
+                                    },
+                                    onPanUpdate: (d) => setState(
+                                      () => label.position += d.delta,
+                                    ),
+                                    child: FractionalTranslation(
+                                      translation: const Offset(0.0, -0.5),
+                                      child: Text(
+                                        label.text,
+                                        style: TextStyle(
+                                          color: label.color,
+                                          fontSize: label.fontSize,
+                                          fontWeight: FontWeight.bold,
+                                          shadows: const [
+                                            Shadow(
+                                              blurRadius: 2,
+                                              color: Colors.white,
+                                              offset: Offset(0.5, 0.5),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
                         ),
-                      ),
-                      // Text labels on top so they can be tapped/dragged
-                      for (final label in _textLabelsFor(page))
-                        Positioned(
-                          key: ObjectKey(label),
-                          left: label.position.dx,
-                          top: label.position.dy,
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onTap: () => _editTextLabel(page, label),
-                            onLongPress: () {
-                              final list = _textLabelsFor(page);
-                              final idx = list.indexOf(label);
-                              if (idx == -1) return;
-                              setState(() => list.removeAt(idx));
-                              _pushAction(_Action(
-                                undo: () => _textLabelsFor(page)
-                                    .insert(idx, label),
-                                redo: () =>
-                                    _textLabelsFor(page).remove(label),
-                              ));
-                            },
-                            onPanUpdate: (d) => setState(
-                              () => label.position += d.delta,
-                            ),
-                            child: FractionalTranslation(
-                              translation: const Offset(0.0, -0.5),
-                              child: Text(
-                                label.text,
-                                style: TextStyle(
-                                  color: label.color,
-                                  fontSize: label.fontSize,
-                                  fontWeight: FontWeight.bold,
-                                  shadows: const [
-                                    Shadow(
-                                      blurRadius: 2,
-                                      color: Colors.white,
-                                      offset: Offset(0.5, 0.5),
-                                    ),
-                                  ],
+                        // Lock overlay — visual cue only, drawn outside the
+                        // RepaintBoundary so it never appears in the export.
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: CustomPaint(
+                              painter: _LockOverlayPainter(
+                                lockedRegionsForPage(
+                                  widget.editablePdfPath,
+                                  page,
                                 ),
                               ),
                             ),
                           ),
                         ),
-                    ],
-                  ),
+                      ],
+                    );
+                  },
                 ),
               ),
             ),
@@ -1088,15 +1334,15 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(Icons.zoom_out_map,
-                              color: Colors.white, size: 16),
+                          Icon(
+                            Icons.zoom_out_map,
+                            color: Colors.white,
+                            size: 16,
+                          ),
                           SizedBox(width: 4),
                           Text(
                             'Reset',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                            ),
+                            style: TextStyle(color: Colors.white, fontSize: 12),
                           ),
                         ],
                       ),
@@ -1119,22 +1365,19 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                   borderRadius: BorderRadius.circular(20),
                   onTap: () => _clearPage(page),
                   child: const Padding(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
+                    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.layers_clear_rounded,
-                            color: Colors.white, size: 16),
+                        Icon(
+                          Icons.layers_clear_rounded,
+                          color: Colors.white,
+                          size: 16,
+                        ),
                         SizedBox(width: 4),
                         Text(
                           'Clear',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                          ),
+                          style: TextStyle(color: Colors.white, fontSize: 12),
                         ),
                       ],
                     ),
@@ -1183,17 +1426,16 @@ class _TextInputDialogState extends State<_TextInputDialog> {
   }
 
   void _submit() => Navigator.pop(
-        context,
-        _TextDialogResult(_controller.text.trim(), _fontSize),
-      );
+    context,
+    _TextDialogResult(_controller.text.trim(), _fontSize),
+  );
 
   @override
   Widget build(BuildContext context) {
     final editing = widget.initialText.isNotEmpty;
     return AlertDialog(
       backgroundColor: const Color(0xFF2D2D44),
-      shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       title: Text(
         editing ? 'Edit text' : 'Add text',
         style: const TextStyle(
@@ -1259,13 +1501,14 @@ class _TextInputDialogState extends State<_TextInputDialog> {
           TextButton(
             onPressed: () =>
                 Navigator.pop(context, const _TextDialogResult('', 0)),
-            child: const Text('Delete',
-                style: TextStyle(color: Colors.redAccent)),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: Colors.redAccent),
+            ),
           ),
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel',
-              style: TextStyle(color: Colors.white70)),
+          child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
         ),
         FilledButton(
           style: FilledButton.styleFrom(
@@ -1321,11 +1564,7 @@ class _ToolbarIcon extends StatelessWidget {
   final VoidCallback onTap;
   final String? tooltip;
 
-  const _ToolbarIcon({
-    required this.icon,
-    required this.onTap,
-    this.tooltip,
-  });
+  const _ToolbarIcon({required this.icon, required this.onTap, this.tooltip});
 
   @override
   Widget build(BuildContext context) {
@@ -1441,4 +1680,48 @@ class _DrawingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_DrawingPainter old) => true;
+}
+
+// ── Locked-region overlay ─────────────────────────────────────────────────────
+// Shades the protected patient field with a subtle tint, a hatched border and a
+// small lock glyph. Normalised rects (0..1) are scaled to the paint size. This
+// is purely a visual cue and is never part of the exported PDF.
+
+class _LockOverlayPainter extends CustomPainter {
+  final List<Rect> normalizedRects;
+  const _LockOverlayPainter(this.normalizedRects);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (normalizedRects.isEmpty) return;
+    final fill = Paint()..color = const Color(0x14000000);
+    final border = Paint()
+      ..color = const Color(0x665D4B8A)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    for (final n in normalizedRects) {
+      final rect = Rect.fromLTRB(
+        n.left * size.width,
+        n.top * size.height,
+        n.right * size.width,
+        n.bottom * size.height,
+      );
+      final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(4));
+      canvas.drawRRect(rrect, fill);
+      canvas.drawRRect(rrect, border);
+
+      // Tiny lock glyph in the top-left corner of the region.
+      final tp = TextPainter(
+        text: const TextSpan(text: '\u{1F512}', style: TextStyle(fontSize: 11)),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      if (rect.width > tp.width + 6 && rect.height > tp.height) {
+        tp.paint(canvas, rect.topLeft + const Offset(3, 1));
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_LockOverlayPainter old) =>
+      old.normalizedRects != normalizedRects;
 }

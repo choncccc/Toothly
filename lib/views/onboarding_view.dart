@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 
 import '../data/clinical_checklist.dart';
@@ -12,9 +13,9 @@ const _purpleDeep = Color(0xFF8F6BFF);
 const _gold = Color(0xFFf7e4b0);
 const _border = Color(0xFFE6E1F5);
 
-/// First-launch flow. Collects the practitioner's name (screen 1) and clinic
-/// level (screen 2), persists them locally, then enters the app. Shown only
-/// while [ProfileStore.onboardingComplete] is false.
+/// First-launch flow. Collects the client-assigned 2-digit user code (screen 1)
+/// and clinic level (screen 2), persists them locally, then enters the app.
+/// Shown only while [ProfileStore.onboardingComplete] is false.
 class OnboardingView extends StatefulWidget {
   const OnboardingView({super.key});
 
@@ -24,8 +25,7 @@ class OnboardingView extends StatefulWidget {
 
 class _OnboardingViewState extends State<OnboardingView> {
   final _pageCtl = PageController();
-  final _firstCtl = TextEditingController();
-  final _lastCtl = TextEditingController();
+  final _codeCtl = TextEditingController();
 
   int _page = 0;
   String _clinicLevel = ClinicalChecklist.levels.first;
@@ -34,15 +34,14 @@ class _OnboardingViewState extends State<OnboardingView> {
   @override
   void dispose() {
     _pageCtl.dispose();
-    _firstCtl.dispose();
-    _lastCtl.dispose();
+    _codeCtl.dispose();
     super.dispose();
   }
 
   void _toClinicLevel() {
-    if (_firstCtl.text.trim().isEmpty || _lastCtl.text.trim().isEmpty) {
+    if (_codeCtl.text.trim().length != 2) {
       Fluttertoast.showToast(
-        msg: 'Please enter your first and last name',
+        msg: 'Please enter your 2-digit user code',
         backgroundColor: Colors.red.shade700,
         textColor: Colors.white,
         gravity: ToastGravity.BOTTOM,
@@ -61,8 +60,7 @@ class _OnboardingViewState extends State<OnboardingView> {
     if (_saving) return;
     setState(() => _saving = true);
     await ProfileStore.instance.completeOnboarding(
-      firstName: _firstCtl.text,
-      lastName: _lastCtl.text,
+      userCode: _codeCtl.text,
       clinicLevel: _clinicLevel,
     );
     if (!mounted) return;
@@ -84,9 +82,8 @@ class _OnboardingViewState extends State<OnboardingView> {
                 physics: const NeverScrollableScrollPhysics(),
                 onPageChanged: (i) => setState(() => _page = i),
                 children: [
-                  _NamePage(
-                    firstCtl: _firstCtl,
-                    lastCtl: _lastCtl,
+                  _CodePage(
+                    codeCtl: _codeCtl,
                     onNext: _toClinicLevel,
                   ),
                   _ClinicLevelPage(
@@ -111,16 +108,14 @@ class _OnboardingViewState extends State<OnboardingView> {
 }
 
 // =============================================================================
-// Screen 1 — Name
+// Screen 1 — User code
 // =============================================================================
-class _NamePage extends StatelessWidget {
-  final TextEditingController firstCtl;
-  final TextEditingController lastCtl;
+class _CodePage extends StatelessWidget {
+  final TextEditingController codeCtl;
   final VoidCallback onNext;
 
-  const _NamePage({
-    required this.firstCtl,
-    required this.lastCtl,
+  const _CodePage({
+    required this.codeCtl,
     required this.onNext,
   });
 
@@ -136,21 +131,18 @@ class _NamePage extends StatelessWidget {
           const SizedBox(height: 24),
           const _Title('Welcome to Toothly'),
           const SizedBox(height: 6),
-          const _Subtitle("Let's set up your profile. What's your name?"),
+          const _Subtitle('Enter the 2-digit user code assigned to you.'),
           const SizedBox(height: 28),
-          const _FieldLabel('First name'),
+          const _FieldLabel('User code'),
           _RoundedField(
-            controller: firstCtl,
-            hint: 'Juan',
-            icon: Icons.person_outline_rounded,
-            textInputAction: TextInputAction.next,
-          ),
-          const SizedBox(height: 16),
-          const _FieldLabel('Last name'),
-          _RoundedField(
-            controller: lastCtl,
-            hint: 'Dela Cruz',
-            icon: Icons.badge_outlined,
+            controller: codeCtl,
+            hint: '01',
+            icon: Icons.tag_rounded,
+            keyboardType: TextInputType.number,
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              LengthLimitingTextInputFormatter(2),
+            ],
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => onNext(),
           ),
@@ -411,6 +403,8 @@ class _RoundedField extends StatelessWidget {
   final IconData icon;
   final TextInputAction? textInputAction;
   final ValueChanged<String>? onSubmitted;
+  final TextInputType? keyboardType;
+  final List<TextInputFormatter>? inputFormatters;
 
   const _RoundedField({
     required this.controller,
@@ -418,6 +412,8 @@ class _RoundedField extends StatelessWidget {
     required this.icon,
     this.textInputAction,
     this.onSubmitted,
+    this.keyboardType,
+    this.inputFormatters,
   });
 
   @override
@@ -426,6 +422,8 @@ class _RoundedField extends StatelessWidget {
       controller: controller,
       cursorColor: _primary,
       textInputAction: textInputAction,
+      keyboardType: keyboardType,
+      inputFormatters: inputFormatters,
       textCapitalization: TextCapitalization.words,
       onSubmitted: onSubmitted,
       style: const TextStyle(color: _primary),
