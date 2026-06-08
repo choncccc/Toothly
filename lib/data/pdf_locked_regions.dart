@@ -25,13 +25,13 @@ const Map<String, Rect> _kFirstPageLocks = {
     0.1895,
   ),
   r'assets/pdf/ENDO CHART/ENDO (LIVE PX)/Endodontic-form.pdf': Rect.fromLTRB(
-    0.1079,
-    0.1528,
-    0.95,
-    0.1737,
+    0.1117,
+    0.1652,
+    0.7243,
+    0.1891,
   ),
   r'assets/pdf/ENDO CHART/ENDO (LIVE PX)/ENDODONTIC-CASE-RECALL.pdf':
-      Rect.fromLTRB(0.1079, 0.2463, 0.95, 0.2741),
+      Rect.fromLTRB(0.1117, 0.2466, 0.6259, 0.2737),
   r'assets/pdf/EXO CHART/EXO (LIVE PX)/Exodontia-patient-form.pdf':
       Rect.fromLTRB(0.1079, 0.1895, 0.66, 0.2114),
   r'assets/pdf/FPD CHART/PATIENT CHART.pdf': Rect.fromLTRB(
@@ -100,6 +100,22 @@ const Map<String, Rect> _kFirstPageLocks = {
       Rect.fromLTRB(0.049, 0.1838, 0.6963, 0.2073),
   r'assets/pdf/RESTO CHART/RESTO (CHECK LIST)/Copy of CLASS-V-LIVE-PX.pdf':
       Rect.fromLTRB(0.049, 0.1838, 0.6963, 0.2073),
+  r'assets/pdf/PEDIA CHART/PEDIA (CHECK LIST)/Copy of ART-Pedia.pdf':
+      Rect.fromLTRB(0.0545, 0.2166, 0.6593, 0.2428),
+  r'assets/pdf/PEDIA CHART/PEDIA (CHECK LIST)/PFS-Pedia (1).pdf': Rect.fromLTRB(
+    0.0545,
+    0.2171,
+    0.6593,
+    0.2434,
+  ),
+  r'assets/pdf/PEDIA CHART/PEDIA (CHECK LIST)/PRR-Pediaa.pdf': Rect.fromLTRB(
+    0.0529,
+    0.1950,
+    0.6413,
+    0.2198,
+  ),
+  r'assets/pdf/PEDIA CHART/PEDIA (LIVE PX)/Pediatric-appliance-SPACE-MAINTAINER.pdf':
+      Rect.fromLTRB(0.1706, 0.1606, 0.7829, 0.1854),
   r'assets/pdf/PERIO CHART/PERIO-CHART.pdf': Rect.fromLTRB(
     0.1667,
     0.1534,
@@ -118,103 +134,4 @@ List<Rect> lockedRegionsForPage(String assetPath, int page) {
   if (page != 1) return const [];
   final r = _kFirstPageLocks[assetPath];
   return r == null ? const [] : [r];
-}
-
-/// Where the auto-generated case number is stamped on a form's first page: the
-/// blank just after the "…Control Number:" label. All values are normalised to
-/// the page (0..1).
-class CaseStampAnchor {
-  /// Left edge of the stamped text.
-  final double x;
-
-  /// Vertical centre of the stamped text.
-  final double centerY;
-
-  /// Text height as a fraction of page height (used to scale the font).
-  final double height;
-
-  const CaseStampAnchor(this.x, this.centerY, this.height);
-}
-
-const Map<String, CaseStampAnchor> _kCaseStampAnchors = {
-  r'assets/pdf/CD CHART/PATIENT CHART.pdf': CaseStampAnchor(
-    0.4151,
-    0.1427,
-    0.0128,
-  ),
-  r'assets/pdf/CD CHART/CD PATIENT SCORE SHEET.pdf': CaseStampAnchor(
-    0.4242,
-    0.1786,
-    0.0119,
-  ),
-  r'assets/pdf/ENDO CHART/ENDO (LIVE PX)/Endodontic-form.pdf': CaseStampAnchor(
-    0.7914,
-    0.1632,
-    0.0109,
-  ),
-  r'assets/pdf/ENDO CHART/ENDO (LIVE PX)/ENDODONTIC-CASE-RECALL.pdf':
-      CaseStampAnchor(0.4211, 0.2602, 0.0152),
-  r'assets/pdf/EXO CHART/EXO (LIVE PX)/Exodontia-patient-form.pdf':
-      CaseStampAnchor(0.4242, 0.2004, 0.0119),
-  r'assets/pdf/FPD CHART/PATIENT CHART.pdf': CaseStampAnchor(
-    0.4151,
-    0.1427,
-    0.0128,
-  ),
-  r'assets/pdf/FPD CHART/FPD PATIENT SCORE SHEET.pdf': CaseStampAnchor(
-    0.3993,
-    0.2421,
-    0.0109,
-  ),
-  r'assets/pdf/RPD CHART/PATIENT CHART.pdf': CaseStampAnchor(
-    0.4151,
-    0.1427,
-    0.0128,
-  ),
-  r'assets/pdf/RPD CHART/RPD PATIENT SCORE SHEET.pdf': CaseStampAnchor(
-    0.3993,
-    0.1779,
-    0.0109,
-  ),
-  r'assets/pdf/RESTO CHART/Patient-Form-2024.pdf': CaseStampAnchor(
-    0.4151,
-    0.1427,
-    0.0128,
-  ),
-  r'assets/pdf/RESTO CHART/RESTO (LIVE PX)/CLASS-I-LIVE-PX.pdf':
-      CaseStampAnchor(0.3654, 0.1956, 0.0128),
-  r'assets/pdf/RESTO CHART/RESTO (LIVE PX)/CLASS-II-LIVE-PX.pdf':
-      CaseStampAnchor(0.3654, 0.1956, 0.0128),
-  r'assets/pdf/RESTO CHART/RESTO (LIVE PX)/CLASS-III-LIVE-PX.pdf':
-      CaseStampAnchor(0.3654, 0.1956, 0.0128),
-  r'assets/pdf/RESTO CHART/RESTO (LIVE PX)/CLASS-IV-LIVE-PX.pdf':
-      CaseStampAnchor(0.3654, 0.1956, 0.0128),
-  r'assets/pdf/RESTO CHART/RESTO (LIVE PX)/CLASS-V-LIVE-PX.pdf':
-      CaseStampAnchor(0.3654, 0.1956, 0.0128),
-  r'assets/pdf/RESTO CHART/RESTO (CHECK LIST)/Copy of CLASS-I-LIVE-PX.pdf':
-      CaseStampAnchor(0.3654, 0.1956, 0.0128),
-  r'assets/pdf/RESTO CHART/RESTO (CHECK LIST)/Copy of CLASS-II-LIVE-PX.pdf':
-      CaseStampAnchor(0.3654, 0.1956, 0.0128),
-  r'assets/pdf/RESTO CHART/RESTO (CHECK LIST)/Copy of CLASS-III-LIVE-PX.pdf':
-      CaseStampAnchor(0.3654, 0.1956, 0.0128),
-  r'assets/pdf/RESTO CHART/RESTO (CHECK LIST)/Copy of CLASS-IV-LIVE-PX.pdf':
-      CaseStampAnchor(0.3654, 0.1956, 0.0128),
-  r'assets/pdf/RESTO CHART/RESTO (CHECK LIST)/Copy of CLASS-V-LIVE-PX.pdf':
-      CaseStampAnchor(0.3654, 0.1956, 0.0128),
-  r'assets/pdf/PERIO CHART/PERIO-CHART.pdf': CaseStampAnchor(
-    0.4831,
-    0.1652,
-    0.0128,
-  ),
-  r'assets/pdf/PERIO CHART/PERIO (CHECK LIST)/Oral-Prophylaxis-form-PX(1).pdf':
-      CaseStampAnchor(0.4831, 0.1884, 0.0128),
-  r'assets/pdf/PERIO CHART/PERIO (CHECK LIST)/FLUORIDE-APPLICATION(1).pdf':
-      CaseStampAnchor(0.4824, 0.181, 0.0128),
-};
-
-/// Anchor for the case-number stamp on [assetPath] page [page] (1-based), or
-/// null when this form/page has no patient field to stamp.
-CaseStampAnchor? caseStampAnchorForPage(String assetPath, int page) {
-  if (page != 1) return null;
-  return _kCaseStampAnchors[assetPath];
 }

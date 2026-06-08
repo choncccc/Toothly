@@ -8,7 +8,6 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import '../data/pdf_locked_regions.dart';
 import '../services/local/draft_store.dart';
-import '../services/local/profile_store.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -80,10 +79,6 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
 
   _Stroke? _active;
   int _drawingPage = -1;
-  // Auto-generated, user-scoped case number stamped into the locked patient
-  // field on page 1 (e.g. 101 for user 01). Allocated on open, kept in the
-  // draft so it survives "continue later".
-  int? _caseNumber;
   Color _color = Colors.blue;
   double _penWidth = 3.0;
   double _textSize = 16.0;
@@ -149,119 +144,11 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
           _pageAspectRatios.addAll(ratios);
         });
         await _maybeRestoreDraft();
-        // A restored draft carries its own case number. Otherwise, for forms
-        // that have a patient field, ask whether this is a new patient (reserve
-        // a fresh number) or an existing one (reuse a number — e.g. when a
-        // patient needs more than one form).
-        if (_caseNumber == null && _hasPatientField && mounted) {
-          await _choosePatientCase();
-        }
       }
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     }
   }
-
-  /// Whether this form has a patient field to number/stamp on page 1.
-  bool get _hasPatientField =>
-      caseStampAnchorForPage(widget.editablePdfPath, 1) != null;
-
-  /// The text stamped into the patient field, e.g. `Case No. 101`.
-  String get _caseLabel => _caseNumber == null ? '' : 'Case No. $_caseNumber';
-
-  /// Decides the case number for a brand-new case: reuse an existing patient's
-  /// number, or reserve the next one.
-  Future<void> _choosePatientCase() async {
-    final store = ProfileStore.instance;
-    final existing = store.existingCaseNumbers;
-    int? chosen;
-    if (existing.isEmpty) {
-      // No prior patients — nothing to reuse, just take the next number.
-      chosen = await store.allocateCaseNumber();
-    } else {
-      final isNew = await _askNewPatient();
-      if (isNew == false) {
-        chosen = await _pickExistingPatient(existing);
-      }
-      // "New patient", or the picker was dismissed: reserve a fresh number.
-      chosen ??= await store.allocateCaseNumber();
-    }
-    if (mounted) setState(() => _caseNumber = chosen);
-  }
-
-  Future<bool?> _askNewPatient() => showDialog<bool>(
-    context: context,
-    barrierDismissible: false,
-    builder: (ctx) => AlertDialog(
-      backgroundColor: const Color(0xFF2D2D44),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      title: const Text(
-        'Is this for a new patient?',
-        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-      ),
-      content: const Text(
-        'Choose "New patient" to generate a new case number, or "Existing '
-        'patient" to reuse a number when a patient needs more than one form.',
-        style: TextStyle(color: Colors.white70, height: 1.4),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, false),
-          child: const Text(
-            'Existing patient',
-            style: TextStyle(color: Colors.white70),
-          ),
-        ),
-        FilledButton(
-          style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFF8F6BFF),
-          ),
-          onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('New patient'),
-        ),
-      ],
-    ),
-  );
-
-  Future<int?> _pickExistingPatient(List<int> numbers) => showDialog<int>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      backgroundColor: const Color(0xFF2D2D44),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      title: const Text(
-        'Select patient',
-        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-      ),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: ListView.builder(
-          shrinkWrap: true,
-          itemCount: numbers.length,
-          itemBuilder: (_, i) {
-            // Newest first.
-            final n = numbers[numbers.length - 1 - i];
-            return ListTile(
-              leading: const Icon(
-                Icons.badge_outlined,
-                color: Color(0xFF8F6BFF),
-              ),
-              title: Text(
-                'Case No. $n',
-                style: const TextStyle(color: Colors.white),
-              ),
-              onTap: () => Navigator.pop(ctx, n),
-            );
-          },
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx),
-          child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
-        ),
-      ],
-    ),
-  );
 
   // ── Draft persistence ─────────────────────────────────────────────────────
 
@@ -309,7 +196,6 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       'title': widget.title,
       'editablePdfPath': widget.editablePdfPath,
       'companionPdfPaths': widget.companionPdfPaths,
-      'caseNumber': _caseNumber,
       'strokes': strokes,
       'labels': labels,
     };
@@ -318,7 +204,6 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
   void _applyDraft(Map<String, dynamic> data) {
     final strokesJson = (data['strokes'] as Map?)?.cast<String, dynamic>();
     final labelsJson = (data['labels'] as Map?)?.cast<String, dynamic>();
-    _caseNumber = (data['caseNumber'] as num?)?.toInt();
     _strokes.clear();
     _textLabels.clear();
     if (strokesJson != null) {
@@ -1122,29 +1007,6 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     );
   }
 
-  /// The case-number text positioned over the locked patient field. Lives
-  /// inside the page's RepaintBoundary so it is baked into the saved PDF.
-  Widget _buildCaseStamp(int page) {
-    if (_caseNumber == null) return const SizedBox.shrink();
-    final anchor = caseStampAnchorForPage(widget.editablePdfPath, page);
-    final size = _pageSizes[page];
-    if (anchor == null || size == null) return const SizedBox.shrink();
-    final fontSize = anchor.height * size.height * 1.25;
-    return Positioned(
-      left: anchor.x * size.width,
-      top: anchor.centerY * size.height - fontSize * 0.66,
-      child: Text(
-        _caseLabel,
-        style: TextStyle(
-          color: Colors.black,
-          fontSize: fontSize,
-          fontWeight: FontWeight.w600,
-          height: 1.0,
-        ),
-      ),
-    );
-  }
-
   Widget _buildPage(int page) {
     final imageBytes = _pageImages[page];
     if (imageBytes == null) return const SizedBox.shrink();
@@ -1183,8 +1045,6 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                             fit: StackFit.expand,
                             children: [
                               Image.memory(imageBytes, fit: BoxFit.fill),
-                              // Auto-stamped case number (part of the export).
-                              _buildCaseStamp(page),
                               // Draw / tap overlay (below labels so labels stay interactive)
                               Positioned.fill(
                                 child: Listener(
