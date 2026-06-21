@@ -446,9 +446,14 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
 
   void _updateStroke(DragUpdateDetails d, int page) {
     if (_active == null || _drawingPage != page) return;
-    // Skip points that wander into the protected field so strokes can't bleed
-    // into it from outside.
-    if (_isLocked(page, d.localPosition)) return;
+    // If the pointer wanders into the protected field, finalize the current
+    // stroke and stop drawing for the rest of this drag. Skipping the point
+    // alone isn't enough — the painter connects consecutive points with a
+    // straight line, so a stroke crossing the field would bridge right over it.
+    if (_isLocked(page, d.localPosition)) {
+      _commitActiveStroke(page);
+      return;
+    }
     setState(() {
       _active = _Stroke(
         [..._active!.points, d.localPosition],
@@ -458,9 +463,12 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     });
   }
 
-  void _endStroke(DragEndDetails d, int page) {
-    if (_active == null) return;
-    final added = _active!;
+  void _endStroke(DragEndDetails d, int page) => _commitActiveStroke(page);
+
+  // Commit the in-progress stroke (if any) to the page and record it for undo.
+  void _commitActiveStroke(int page) {
+    final added = _active;
+    if (added == null) return;
     setState(() {
       _strokesFor(page).add(added);
       _active = null;
@@ -1125,9 +1133,13 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                                         ),
                                       );
                                     },
-                                    onPanUpdate: (d) => setState(
-                                      () => label.position += d.delta,
-                                    ),
+                                    onPanUpdate: (d) {
+                                      // Don't let a label be dragged into the
+                                      // protected patient field.
+                                      final next = label.position + d.delta;
+                                      if (_isLocked(page, next)) return;
+                                      setState(() => label.position = next);
+                                    },
                                     child: FractionalTranslation(
                                       translation: const Offset(0.0, -0.5),
                                       child: Text(
