@@ -105,7 +105,6 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
   // Identity of the record being edited. Null id means nothing has been saved
   // yet, so the first save inserts a new row rather than overwriting one.
   int? _recordId;
-  String? _patientName;
   String? _patientCode;
 
   String get _category =>
@@ -125,7 +124,6 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     final existing = widget.record;
     if (existing != null) {
       _recordId = existing.id;
-      _patientName = existing.patientName;
       _patientCode = existing.patientCode;
     }
     _loadDocument();
@@ -390,7 +388,6 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     _patientCode ??= await RecordStore.instance.nextPatientCode(_category);
     final id = await RecordStore.instance.save(
       id: _recordId,
-      patientName: _patientName ?? '',
       patientCode: _patientCode,
       category: _category,
       formTitle: widget.title,
@@ -934,7 +931,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
 
   /// Filename stem for exports and print jobs: patient first, then the form.
   String get _documentName {
-    final patient = (_patientCode ?? _patientName ?? 'patient')
+    final patient = (_patientCode ?? 'patient')
         .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
     return '${patient}_${widget.title.replaceAll(' ', '_')}';
   }

@@ -12,7 +12,10 @@ import 'package:sqflite/sqflite.dart';
 /// form silently overwrote the first.
 class PatientRecord {
   final int id;
-  final String patientName;
+
+  /// Card/control number issued by the app. This is the record's identity —
+  /// charts are not named after patients, matching the locked control-number
+  /// field on the forms themselves.
   final String? patientCode;
 
   /// Folder this record lives in, e.g. 'Pediatric'. Matches the card titles in
@@ -34,7 +37,6 @@ class PatientRecord {
 
   PatientRecord({
     required this.id,
-    required this.patientName,
     required this.patientCode,
     required this.category,
     required this.formTitle,
@@ -47,7 +49,6 @@ class PatientRecord {
 
   factory PatientRecord.fromMap(Map<String, dynamic> m) => PatientRecord(
         id: m['id'] as int,
-        patientName: m['patient_name'] as String,
         patientCode: m['patient_code'] as String?,
         category: m['category'] as String,
         formTitle: m['form_title'] as String,
@@ -67,14 +68,10 @@ class PatientRecord {
             DateTime.fromMillisecondsSinceEpoch(m['updated_at'] as int),
       );
 
-  /// Label shown on cards. The code is always present and is the record's
-  /// identity; a name is optional and only shown once one has been added.
+  /// Label shown on cards — the assigned control number.
   String get displayLabel {
     final code = patientCode?.trim() ?? '';
-    final name = patientName.trim();
-    if (name.isEmpty) return code.isEmpty ? 'Unnamed record' : code;
-    if (code.isEmpty) return name;
-    return '$code · $name';
+    return code.isEmpty ? 'Unassigned record' : code;
   }
 }
 
@@ -189,18 +186,16 @@ class RecordStore {
     return rows.map(PatientRecord.fromMap).toList();
   }
 
-  /// Case-insensitive match on patient name or patient code. An empty [query]
+  /// Case-insensitive partial match on the patient code. An empty [query]
   /// returns nothing so the caller can fall back to the folder view.
   Future<List<PatientRecord>> search(String query) async {
     final q = query.trim();
     if (q.isEmpty) return const [];
     final db = await _database;
-    final like = '%${q.toLowerCase()}%';
     final rows = await db.query(
       'records',
-      where:
-          'LOWER(patient_name) LIKE ? OR LOWER(IFNULL(patient_code, "")) LIKE ?',
-      whereArgs: [like, like],
+      where: 'LOWER(IFNULL(patient_code, "")) LIKE ?',
+      whereArgs: ['%${q.toLowerCase()}%'],
       orderBy: 'updated_at DESC',
     );
     return rows.map(PatientRecord.fromMap).toList();
@@ -222,8 +217,10 @@ class RecordStore {
   /// PED-2026-003. The chart's own control-number field is a locked region the
   /// student cannot write in (see `pdf_locked_regions.dart`) because the code is
   /// issued here rather than typed by hand.
-  Future<String> nextPatientCode(String category) async {
-    final db = await _database;
+  Future<String> nextPatientCode(String category) async =>
+      _nextPatientCode(await _database, category);
+
+  Future<String> _nextPatientCode(Database db, String category) async {
     final prefix = _codePrefixes[category] ?? 'GEN';
     final year = DateTime.now().year;
     final stem = '$prefix-$year-';
@@ -256,7 +253,6 @@ class RecordStore {
   /// place. Returns the row id either way.
   Future<int> save({
     int? id,
-    String patientName = '',
     String? patientCode,
     required String category,
     required String formTitle,
@@ -269,7 +265,10 @@ class RecordStore {
     final code = patientCode?.trim();
 
     final values = {
-      'patient_name': patientName.trim(),
+      // patient_name is a vestigial NOT NULL column from when records were
+      // named. Records are identified by code now; the column is kept so
+      // existing databases keep accepting inserts.
+      'patient_name': '',
       'patient_code': (code == null || code.isEmpty) ? null : code,
       'category': category,
       'form_title': formTitle,
@@ -286,21 +285,6 @@ class RecordStore {
     return id;
   }
 
-  /// Attaches or updates the optional patient name on a record. The patient
-  /// code is issued by the app and is never edited.
-  Future<void> renamePatient(int id, String patientName) async {
-    final db = await _database;
-    await db.update(
-      'records',
-      {
-        'patient_name': patientName.trim(),
-        'updated_at': DateTime.now().millisecondsSinceEpoch,
-      },
-      where: 'id = ?',
-      whereArgs: [id],
-    );
-  }
-
   Future<void> delete(int id) async {
     final db = await _database;
     await db.delete('records', where: 'id = ?', whereArgs: [id]);
@@ -309,8 +293,8 @@ class RecordStore {
   // --- Legacy import ---------------------------------------------------------
 
   /// One-time import of the old `pdf_drafts/*.json` files so work saved before
-  /// this change is not stranded. Imported drafts have no patient attached, so
-  /// they land under a placeholder name the student can correct on next save.
+  /// this change is not stranded. Each import is assigned a control number the
+  /// same way a new record is.
   ///
   /// Each source file is deleted only after its row is written, so an interrupted
   /// import re-runs safely on the next launch.
@@ -337,10 +321,11 @@ class RecordStore {
                   ?.millisecondsSinceEpoch ??
               DateTime.now().millisecondsSinceEpoch;
 
+          final category = categoryForTemplate(templatePath);
           await db.insert('records', {
-            'patient_name': 'Untitled patient',
-            'patient_code': null,
-            'category': categoryForTemplate(templatePath),
+            'patient_name': '',
+            'patient_code': await _nextPatientCode(db, category),
+            'category': category,
             'form_title': title,
             'template_path': templatePath,
             'companion_paths':

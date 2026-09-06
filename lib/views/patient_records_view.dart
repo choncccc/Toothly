@@ -141,9 +141,9 @@ class _PatientRecordsViewState extends State<PatientRecordsView> {
       return [
         _EmptyState(
           icon: Icons.search_off_rounded,
-          title: 'No matching patient',
+          title: 'No matching record',
           message: 'Nothing found for "${_query.trim()}". '
-              'Try part of the name or the patient code.',
+              'Try part of the patient code, e.g. PED-2026.',
         ),
       ];
     }
@@ -244,19 +244,6 @@ class _FolderViewState extends State<_FolderView> {
     _reload();
   }
 
-  Future<void> _rename(PatientRecord record) async {
-    final name = await showDialog<String>(
-      context: context,
-      builder: (_) => _PatientNameDialog(
-        code: record.patientCode ?? '',
-        initialName: record.patientName,
-      ),
-    );
-    if (name == null) return;
-    await RecordStore.instance.renamePatient(record.id, name);
-    _reload();
-  }
-
   Future<void> _confirmDelete(PatientRecord record) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -337,7 +324,6 @@ class _FolderViewState extends State<_FolderView> {
               record: records[i],
               onTap: () => _open(records[i]),
               onDelete: () => _confirmDelete(records[i]),
-              onRename: () => _rename(records[i]),
             ),
           );
         },
@@ -361,7 +347,7 @@ class _SearchField extends StatelessWidget {
       style: const TextStyle(color: _primary),
       textInputAction: TextInputAction.search,
       decoration: InputDecoration(
-        hintText: 'Search by patient name or code…',
+        hintText: 'Search by patient code…',
         hintStyle: TextStyle(color: Colors.grey.shade500, fontSize: 14),
         prefixIcon: const Icon(Icons.search_rounded, color: _primary),
         filled: true,
@@ -458,14 +444,12 @@ class _RecordTile extends StatelessWidget {
   final PatientRecord record;
   final VoidCallback onTap;
   final VoidCallback? onDelete;
-  final VoidCallback? onRename;
   final bool showCategory;
 
   const _RecordTile({
     required this.record,
     required this.onTap,
     this.onDelete,
-    this.onRename,
     this.showCategory = false,
   });
 
@@ -548,28 +532,14 @@ class _RecordTile extends StatelessWidget {
                   ],
                 ),
               ),
-              if (onDelete != null || onRename != null)
-                PopupMenuButton<String>(
+              if (onDelete != null)
+                IconButton(
                   icon: Icon(
-                    Icons.more_vert_rounded,
+                    Icons.delete_outline_rounded,
                     color: Colors.grey.shade500,
                   ),
-                  onSelected: (value) {
-                    if (value == 'rename') onRename?.call();
-                    if (value == 'delete') onDelete?.call();
-                  },
-                  itemBuilder: (_) => [
-                    if (onRename != null)
-                      const PopupMenuItem(
-                        value: 'rename',
-                        child: Text('Add / edit patient name'),
-                      ),
-                    if (onDelete != null)
-                      const PopupMenuItem(
-                        value: 'delete',
-                        child: Text('Delete record'),
-                      ),
-                  ],
+                  onPressed: onDelete,
+                  tooltip: 'Delete record',
                 ),
             ],
           ),
@@ -617,110 +587,6 @@ class _EmptyState extends StatelessWidget {
               height: 1.4,
             ),
           ),
-        ),
-      ],
-    );
-  }
-}
-
-/// Adds or edits the optional patient name. The patient code is issued by the
-/// app and is shown read-only.
-class _PatientNameDialog extends StatefulWidget {
-  final String code;
-  final String initialName;
-
-  const _PatientNameDialog({
-    required this.code,
-    required this.initialName,
-  });
-
-  @override
-  State<_PatientNameDialog> createState() => _PatientNameDialogState();
-}
-
-class _PatientNameDialogState extends State<_PatientNameDialog> {
-  late final TextEditingController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = TextEditingController(text: widget.initialName);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _submit() => Navigator.pop(context, _controller.text.trim());
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      title: const Text('Patient name'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: _bgColor,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: _border),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.lock_outline_rounded,
-                    size: 15, color: Colors.grey.shade500),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    widget.code.isEmpty ? 'No code assigned' : widget.code,
-                    style: const TextStyle(
-                      color: _primary,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 14,
-                    ),
-                  ),
-                ),
-                Text(
-                  'assigned by app',
-                  style: TextStyle(
-                    color: Colors.grey.shade500,
-                    fontSize: 11,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          TextField(
-            controller: _controller,
-            autofocus: true,
-            textCapitalization: TextCapitalization.words,
-            textInputAction: TextInputAction.done,
-            onSubmitted: (_) => _submit(),
-            decoration: const InputDecoration(
-              labelText: 'Name (optional)',
-              hintText: 'Juan Dela Cruz',
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          style: FilledButton.styleFrom(backgroundColor: _purpleDeep),
-          onPressed: _submit,
-          child: const Text('Save'),
         ),
       ],
     );
