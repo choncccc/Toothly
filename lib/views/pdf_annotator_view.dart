@@ -173,9 +173,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
         _restoreSavedRecord();
         // Scan for the form's ruled lines in the background: it is only needed
         // once the student taps to type, and it must not delay first paint.
-        for (final entry in images.entries) {
-          unawaited(_detectLines(entry.key, entry.value));
-        }
+        unawaited(_detectLinesForAll(images));
       }
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
@@ -188,6 +186,17 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
   /// printed on each form, so typed text can be dropped onto a line instead of
   /// wherever the tap happened to land.
   final Map<int, List<double>> _pageLines = {};
+
+  /// Scans pages one at a time. Each scan decodes a page to raw RGBA — tens of
+  /// megabytes for an A4 page at 2x — so running them concurrently would hold
+  /// every page in memory at once and starve the export, which needs a large
+  /// allocation of its own.
+  Future<void> _detectLinesForAll(Map<int, Uint8List> images) async {
+    for (final entry in images.entries) {
+      if (!mounted) return;
+      await _detectLines(entry.key, entry.value);
+    }
+  }
 
   /// Scans a rendered page for rows that are mostly dark — the printed rules of
   /// the chart — and records the centre of each run of such rows.
@@ -210,7 +219,8 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
 
       final lines = <double>[];
       int runStart = -1;
-      for (int y = 0; y < height; y++) {
+      const rowStep = 2;
+      for (int y = 0; y < height; y += rowStep) {
         int dark = 0;
         for (int x = 0; x < width; x += step) {
           final i = (y * width + x) * 4;
@@ -223,7 +233,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
         if (isRule && runStart < 0) {
           runStart = y;
         } else if (!isRule && runStart >= 0) {
-          lines.add(((runStart + y - 1) / 2) / height);
+          lines.add(((runStart + y - rowStep) / 2) / height);
           runStart = -1;
         }
       }
@@ -377,91 +387,17 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
   /// is optional so the app works whether or not the clinic issues one.
   /// Returns false when the student cancels.
   Future<bool> _askPatientInfo() async {
-    final nameCtrl = TextEditingController(text: _patientName ?? '');
-    final codeCtrl = TextEditingController(text: _patientCode ?? '');
-    final formKey = GlobalKey<FormState>();
-
-    const inputStyle = TextStyle(color: Colors.white);
-    InputDecoration decoration(String label, String hint) => InputDecoration(
-          labelText: label,
-          hintText: hint,
-          labelStyle: const TextStyle(color: Colors.white70),
-          hintStyle: const TextStyle(color: Colors.white30),
-          enabledBorder: const UnderlineInputBorder(
-            borderSide: BorderSide(color: Colors.white24),
-          ),
-          focusedBorder: const UnderlineInputBorder(
-            borderSide: BorderSide(color: Color(0xFF8F6BFF)),
-          ),
-        );
-
-    final ok = await showDialog<bool>(
+    final result = await showDialog<_PatientDialogResult>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF2D2D44),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-        ),
-        title: const Text(
-          'Patient details',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        content: Form(
-          key: formKey,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextFormField(
-                controller: nameCtrl,
-                style: inputStyle,
-                autofocus: true,
-                textCapitalization: TextCapitalization.words,
-                decoration: decoration('Patient name', 'Juan Dela Cruz'),
-                validator: (v) => (v == null || v.trim().isEmpty)
-                    ? 'Patient name is required'
-                    : null,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: codeCtrl,
-                style: inputStyle,
-                textCapitalization: TextCapitalization.characters,
-                decoration: decoration('Patient code (optional)', 'PED-001'),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text(
-              'Cancel',
-              style: TextStyle(color: Colors.white70),
-            ),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF8F6BFF),
-            ),
-            onPressed: () {
-              if (formKey.currentState?.validate() ?? false) {
-                Navigator.pop(ctx, true);
-              }
-            },
-            child: const Text('Save'),
-          ),
-        ],
+      builder: (_) => _PatientInfoDialog(
+        initialName: _patientName ?? '',
+        initialCode: _patientCode ?? '',
       ),
     );
-
-    final confirmed = ok == true;
-    if (confirmed) {
-      _patientName = nameCtrl.text.trim();
-      _patientCode = codeCtrl.text.trim();
-    }
-    nameCtrl.dispose();
-    codeCtrl.dispose();
-    return confirmed;
+    if (result == null) return false;
+    _patientName = result.name;
+    _patientCode = result.code;
+    return true;
   }
 
   /// Writes the current annotations to the patient's record, asking who the
@@ -1615,6 +1551,123 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
 }
 
 // ── Text input dialog ─────────────────────────────────────────────────────────
+
+class _PatientDialogResult {
+  final String name;
+  final String code;
+  const _PatientDialogResult(this.name, this.code);
+}
+
+class _PatientInfoDialog extends StatefulWidget {
+  final String initialName;
+  final String initialCode;
+
+  const _PatientInfoDialog({
+    required this.initialName,
+    required this.initialCode,
+  });
+
+  @override
+  State<_PatientInfoDialog> createState() => _PatientInfoDialogState();
+}
+
+class _PatientInfoDialogState extends State<_PatientInfoDialog> {
+  late final TextEditingController _nameController;
+  late final TextEditingController _codeController;
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.initialName);
+    _codeController = TextEditingController(text: widget.initialCode);
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _codeController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    Navigator.pop(
+      context,
+      _PatientDialogResult(
+        _nameController.text.trim(),
+        _codeController.text.trim(),
+      ),
+    );
+  }
+
+  InputDecoration _decoration(String label, String hint) => InputDecoration(
+        labelText: label,
+        hintText: hint,
+        labelStyle: const TextStyle(color: Colors.white70),
+        hintStyle: const TextStyle(color: Colors.white30),
+        errorStyle: const TextStyle(color: Colors.redAccent),
+        enabledBorder: const UnderlineInputBorder(
+          borderSide: BorderSide(color: Colors.white24),
+        ),
+        focusedBorder: const UnderlineInputBorder(
+          borderSide: BorderSide(color: Color(0xFF8F6BFF)),
+        ),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF2D2D44),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      title: const Text(
+        'Patient details',
+        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      ),
+      content: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextFormField(
+              controller: _nameController,
+              style: const TextStyle(color: Colors.white),
+              autofocus: true,
+              textCapitalization: TextCapitalization.words,
+              textInputAction: TextInputAction.next,
+              decoration: _decoration('Patient name', 'Juan Dela Cruz'),
+              validator: (v) => (v == null || v.trim().isEmpty)
+                  ? 'Patient name is required'
+                  : null,
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _codeController,
+              style: const TextStyle(color: Colors.white),
+              textCapitalization: TextCapitalization.characters,
+              textInputAction: TextInputAction.done,
+              decoration: _decoration('Patient code (optional)', 'PED-001'),
+              onFieldSubmitted: (_) => _submit(),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF8F6BFF),
+          ),
+          onPressed: _submit,
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
 
 class _TextInputDialog extends StatefulWidget {
   final String initialText;
