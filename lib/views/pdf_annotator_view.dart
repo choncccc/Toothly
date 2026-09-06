@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:ui' as ui;
 import 'dart:io';
 
@@ -7,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import '../data/pdf_locked_regions.dart';
-import '../services/local/draft_store.dart';
+import '../services/local/record_store.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -53,11 +52,22 @@ class PdfAnnotatorView extends StatefulWidget {
   final String editablePdfPath;
   final List<String> companionPdfPaths;
 
+  /// Folder the saved record belongs to, e.g. 'Pediatric'. Falls back to the
+  /// department inferred from [editablePdfPath] when not supplied.
+  final String? category;
+
+  /// Non-null when reopening an already-saved record, which restores its
+  /// annotations and updates that same row on save instead of creating a new
+  /// one.
+  final PatientRecord? record;
+
   const PdfAnnotatorView({
     super.key,
     required this.title,
     required this.editablePdfPath,
     this.companionPdfPaths = const [],
+    this.category,
+    this.record,
   });
 
   @override
@@ -90,6 +100,15 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
   final List<_Action> _undoStack = [];
   final List<_Action> _redoStack = [];
 
+  // Identity of the record being edited. Null id means nothing has been saved
+  // yet, so the first save inserts a new row rather than overwriting one.
+  int? _recordId;
+  String? _patientName;
+  String? _patientCode;
+
+  String get _category =>
+      widget.category ?? RecordStore.categoryForTemplate(widget.editablePdfPath);
+
   static const _colors = [
     Colors.blue,
     Colors.red,
@@ -101,6 +120,12 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
   @override
   void initState() {
     super.initState();
+    final existing = widget.record;
+    if (existing != null) {
+      _recordId = existing.id;
+      _patientName = existing.patientName;
+      _patientCode = existing.patientCode;
+    }
     _loadDocument();
   }
 
@@ -143,16 +168,23 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
           _pageImages.addAll(images);
           _pageAspectRatios.addAll(ratios);
         });
-        await _maybeRestoreDraft();
+        _restoreSavedRecord();
       }
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     }
   }
 
-  // ── Draft persistence ─────────────────────────────────────────────────────
+  // ── Record persistence ────────────────────────────────────────────────────
 
-  Future<File> _draftFile() => DraftStore.fileFor(widget.editablePdfPath);
+  /// Applies the annotations of the record this view was opened with. Opening a
+  /// blank template starts empty on purpose — each patient gets their own row
+  /// rather than reviving whoever last used this form.
+  void _restoreSavedRecord() {
+    final existing = widget.record;
+    if (existing == null) return;
+    setState(() => _applyDraft(existing.annotations));
+  }
 
   int _encodeColor(Color c) {
     final a = (c.a * 255).round();
@@ -244,85 +276,139 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     }
   }
 
-  Future<void> _maybeRestoreDraft() async {
-    try {
-      final f = await _draftFile();
-      if (!f.existsSync()) return;
-      final json = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
-      if (!mounted) return;
-      final restore = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: const Color(0xFF2D2D44),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
+  /// Prompts for the patient this chart belongs to. Name is required; the code
+  /// is optional so the app works whether or not the clinic issues one.
+  /// Returns false when the student cancels.
+  Future<bool> _askPatientInfo() async {
+    final nameCtrl = TextEditingController(text: _patientName ?? '');
+    final codeCtrl = TextEditingController(text: _patientCode ?? '');
+    final formKey = GlobalKey<FormState>();
+
+    const inputStyle = TextStyle(color: Colors.white);
+    InputDecoration decoration(String label, String hint) => InputDecoration(
+          labelText: label,
+          hintText: hint,
+          labelStyle: const TextStyle(color: Colors.white70),
+          hintStyle: const TextStyle(color: Colors.white30),
+          enabledBorder: const UnderlineInputBorder(
+            borderSide: BorderSide(color: Colors.white24),
           ),
-          title: const Text(
-            'Continue draft?',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          focusedBorder: const UnderlineInputBorder(
+            borderSide: BorderSide(color: Color(0xFF8F6BFF)),
           ),
-          content: const Text(
-            'You have unsaved annotations for this case. Restore them?',
-            style: TextStyle(color: Colors.white70, height: 1.4),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text(
-                'Discard',
-                style: TextStyle(color: Colors.redAccent),
-              ),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF8F6BFF),
-              ),
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Restore'),
-            ),
-          ],
+        );
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF2D2D44),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
         ),
-      );
-      if (restore == true) {
-        if (!mounted) return;
-        setState(() => _applyDraft(json));
-      } else {
-        await _clearDraft();
-      }
-    } catch (_) {
-      // Corrupt draft — silently ignore.
+        title: const Text(
+          'Patient details',
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: nameCtrl,
+                style: inputStyle,
+                autofocus: true,
+                textCapitalization: TextCapitalization.words,
+                decoration: decoration('Patient name', 'Juan Dela Cruz'),
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Patient name is required'
+                    : null,
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: codeCtrl,
+                style: inputStyle,
+                textCapitalization: TextCapitalization.characters,
+                decoration: decoration('Patient code (optional)', 'PED-001'),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: Colors.white70),
+            ),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF8F6BFF),
+            ),
+            onPressed: () {
+              if (formKey.currentState?.validate() ?? false) {
+                Navigator.pop(ctx, true);
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    final confirmed = ok == true;
+    if (confirmed) {
+      _patientName = nameCtrl.text.trim();
+      _patientCode = codeCtrl.text.trim();
     }
+    nameCtrl.dispose();
+    codeCtrl.dispose();
+    return confirmed;
   }
 
-  Future<void> _clearDraft() async {
-    try {
-      final f = await _draftFile();
-      if (f.existsSync()) await f.delete();
-    } catch (_) {}
+  /// Writes the current annotations to the patient's record, asking who the
+  /// patient is the first time. Returns false when the student cancels out of
+  /// the patient prompt.
+  Future<bool> _persistRecord() async {
+    if (_patientName == null || _patientName!.isEmpty) {
+      final provided = await _askPatientInfo();
+      if (!provided) return false;
+    }
+    final id = await RecordStore.instance.save(
+      id: _recordId,
+      patientName: _patientName!,
+      patientCode: _patientCode,
+      category: _category,
+      formTitle: widget.title,
+      templatePath: widget.editablePdfPath,
+      companionPaths: widget.companionPdfPaths,
+      annotations: _serializeDraft(),
+    );
+    _recordId = id;
+    return true;
   }
 
   Future<void> _saveDraftAndExit() async {
     try {
-      final f = await _draftFile();
-      await f.writeAsString(jsonEncode(_serializeDraft()));
-      if (!mounted) return;
+      final saved = await _persistRecord();
+      if (!saved || !mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          backgroundColor: Color(0xFF5D4B8A),
+        SnackBar(
+          backgroundColor: const Color(0xFF5D4B8A),
           content: Text(
-            'Draft saved. You can continue later.',
-            style: TextStyle(color: Colors.white),
+            'Saved to $_category · $_patientName',
+            style: const TextStyle(color: Colors.white),
           ),
-          duration: Duration(seconds: 2),
+          duration: const Duration(seconds: 2),
         ),
       );
-      Navigator.of(context).pop();
+      Navigator.of(context).pop(true);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Could not save draft: $e')));
+      ).showSnackBar(SnackBar(content: Text('Could not save record: $e')));
     }
   }
 
@@ -658,6 +744,10 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
   }
 
   Future<void> _exportPdf() async {
+    // File the record first so the export is never the only copy, and so the
+    // PDF can be named after the patient rather than just the form.
+    if (!await _persistRecord()) return;
+    if (!mounted) return;
     setState(() => _saving = true);
     try {
       // Reset zoom on all pages so the rendered snapshot is the full page.
@@ -721,14 +811,13 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       }
 
       final pdfBytes = await pdfDoc.save();
+      final patient = (_patientName ?? 'patient')
+          .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
       final fileName =
-          '${widget.title.replaceAll(' ', '_')}_${DateTime.now().millisecondsSinceEpoch}.pdf';
+          '${patient}_${widget.title.replaceAll(' ', '_')}_${DateTime.now().millisecondsSinceEpoch}.pdf';
 
       await _ensureStoragePermission();
       await _writePdfBytes(pdfBytes, fileName);
-
-      // Case is complete — drop any leftover draft.
-      await _clearDraft();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

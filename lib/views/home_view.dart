@@ -85,6 +85,15 @@ class _HomeScreen extends StatelessWidget {
                   ),
                 ),
                 GButton(
+                  icon: Icons.folder_shared_rounded,
+                  text: 'Records',
+                  textStyle: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+                GButton(
                   icon: Icons.checklist_rounded,
                   text: 'Clinical',
                   textStyle: TextStyle(

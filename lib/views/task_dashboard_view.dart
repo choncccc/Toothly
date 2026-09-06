@@ -6,9 +6,9 @@ import 'package:provider/provider.dart';
 import '../data/clinical_checklist.dart';
 import '../viewmodel/home_viewmodel.dart';
 import '../viewmodel/appointments_viewmodel.dart';
-import '../services/local/draft_store.dart';
+import '../services/local/record_store.dart';
+import 'patient_records_view.dart';
 import '../widgets/animations.dart';
-import 'pdf_annotator_view.dart';
 import 'profile_view.dart';
 
 // Palette ---------------------------------------------------------------------
@@ -819,38 +819,32 @@ class _DraftsSection extends StatefulWidget {
 }
 
 class _DraftsSectionState extends State<_DraftsSection> {
-  late Future<List<CaseDraft>> _future;
+  late Future<List<PatientRecord>> _future;
 
   @override
   void initState() {
     super.initState();
-    _future = DraftStore.list();
+    _future = RecordStore.instance.recent();
   }
 
   void refresh() {
     if (!mounted) return;
-    setState(() => _future = DraftStore.list());
+    setState(() => _future = RecordStore.instance.recent());
   }
 
-  Future<void> _openDraft(CaseDraft d) async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => PdfAnnotatorView(
-          title: d.title,
-          editablePdfPath: d.editablePdfPath,
-          companionPdfPaths: d.companionPdfPaths,
-        ),
-      ),
-    );
+  Future<void> _openRecord(PatientRecord r) async {
+    await openRecord(context, r);
     refresh();
   }
 
-  Future<void> _confirmDelete(CaseDraft d) async {
+  Future<void> _confirmDelete(PatientRecord r) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Discard draft?'),
-        content: Text('Delete the draft for "${d.title}"?'),
+        title: const Text('Delete record?'),
+        content: Text(
+          'Permanently delete ${r.displayLabel} (${r.formTitle})?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -859,13 +853,13 @@ class _DraftsSectionState extends State<_DraftsSection> {
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Discard'),
+            child: const Text('Delete'),
           ),
         ],
       ),
     );
     if (ok == true) {
-      await DraftStore.delete(d.filePath);
+      await RecordStore.instance.delete(r.id);
       refresh();
     }
   }
@@ -886,22 +880,22 @@ class _DraftsSectionState extends State<_DraftsSection> {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<List<CaseDraft>>(
+    return FutureBuilder<List<PatientRecord>>(
       future: _future,
       builder: (context, snap) {
-        final drafts = snap.data ?? const <CaseDraft>[];
-        if (drafts.isEmpty) return const SizedBox.shrink();
+        final records = snap.data ?? const <PatientRecord>[];
+        if (records.isEmpty) return const SizedBox.shrink();
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const _SectionHeader(title: 'Continue Drafts'),
+            const _SectionHeader(title: 'Recent Records'),
             const SizedBox(height: 10),
-            for (final d in drafts) ...[
+            for (final r in records) ...[
               _DraftCard(
-                draft: d,
-                savedAtLabel: _formatSavedAt(d.savedAt),
-                onTap: () => _openDraft(d),
-                onDelete: () => _confirmDelete(d),
+                record: r,
+                savedAtLabel: _formatSavedAt(r.updatedAt),
+                onTap: () => _openRecord(r),
+                onDelete: () => _confirmDelete(r),
               ),
               const SizedBox(height: 8),
             ],
@@ -914,13 +908,13 @@ class _DraftsSectionState extends State<_DraftsSection> {
 }
 
 class _DraftCard extends StatelessWidget {
-  final CaseDraft draft;
+  final PatientRecord record;
   final String savedAtLabel;
   final VoidCallback onTap;
   final VoidCallback onDelete;
 
   const _DraftCard({
-    required this.draft,
+    required this.record,
     required this.savedAtLabel,
     required this.onTap,
     required this.onDelete,
@@ -961,7 +955,7 @@ class _DraftCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      draft.title,
+                      record.displayLabel,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -973,7 +967,7 @@ class _DraftCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Saved $savedAtLabel',
+                      '${record.formTitle} · $savedAtLabel',
                       style: TextStyle(
                         color: Colors.grey.shade600,
                         fontSize: 12,

@@ -114,7 +114,7 @@ class _CreateCaseViewState extends State<CreateCaseView> {
   String _query = '';
 
   void _openPdf(BuildContext context, String label, String pdfPath,
-      List<String> companions) {
+      List<String> companions, String category) {
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -122,6 +122,7 @@ class _CreateCaseViewState extends State<CreateCaseView> {
           title: label,
           editablePdfPath: pdfPath,
           companionPdfPaths: companions,
+          category: category,
         ),
       ),
     );
@@ -192,7 +193,8 @@ class _CreateCaseViewState extends State<CreateCaseView> {
                       .where((it) => it.pdfPath != item.pdfPath)
                       .map((it) => it.pdfPath)
                       .toList();
-                  _openPdf(context, item.label, item.pdfPath, companions);
+                  _openPdf(context, item.label, item.pdfPath, companions,
+                      original.title);
                 },
                 startExpanded: _query.isNotEmpty,
               ),

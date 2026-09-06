@@ -3,6 +3,7 @@ import 'package:toothly/views/create_case_view.dart';
 import '../views/task_dashboard_view.dart';
 import '../views/appointments_view.dart';
 import '../views/clinical_cases_view.dart';
+import '../views/patient_records_view.dart';
 import '../services/local/profile_store.dart';
 import '../services/local/clinical_store.dart';
 
@@ -21,6 +22,7 @@ class HomeViewmodel extends ChangeNotifier {
   List<Widget> get pages => const [
     TaskDashboardPage(),
     CreateCaseView(),
+    PatientRecordsView(),
     ClinicalCasesView(),
     AppointmentsView(),
   ];
