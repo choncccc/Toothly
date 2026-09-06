@@ -19,12 +19,24 @@ class NotificationService {
     tz.setLocalLocation(tz.getLocation(tzInfo.identifier));
 
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-    await _plugin.initialize(const InitializationSettings(android: android));
+    const darwin = DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
+    );
+    await _plugin.initialize(
+      const InitializationSettings(android: android, iOS: darwin),
+    );
 
     await _plugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>()
         ?.requestNotificationsPermission();
+
+    await _plugin
+        .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin>()
+        ?.requestPermissions(alert: true, badge: true, sound: true);
   }
 
   Future<void> scheduleReminder(Appointment appt) async {
@@ -47,6 +59,11 @@ class NotificationService {
           channelDescription: 'Reminders for upcoming dental appointments',
           importance: Importance.high,
           priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
         ),
       ),
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,

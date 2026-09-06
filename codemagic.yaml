@@ -3,47 +3,62 @@ workflows:
     name: iOS TestFlight (Beta)
     instance_type: mac_mini_m2
     max_build_duration: 60
+
+    integrations:
+      # Must match the key name saved in
+      # Codemagic > Team settings > Integrations > Developer Portal.
+      app_store_connect: codemagic
+
     environment:
-      flutter: stable
-      xcode: latest
-      cocoapods: default
-      groups:
-        - app_store_credentials # set in Codemagic UI: see notes below
-      vars:
-        BUNDLE_ID: "com.toothly.app"
-        APP_STORE_APPLE_ID: 0000000000 # TODO: replace with your apps apple id
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.toothly.app
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+
     scripts:
-      - name: Set up code signing
-        script: |
-          xcode-project use-profiles
       - name: Get Flutter packages
-        script: |
-          flutter pub get
+        script: flutter pub get
+
+      - name: Generate launcher icons
+        script: dart run flutter_launcher_icons
+
       - name: Install CocoaPods dependencies
-        script: |
-          find . -name "Podfile" -execdir pod install \;
+        script: find . -name "Podfile" -execdir pod install \;
+
+      - name: Set up code signing
+        script: xcode-project use-profiles
+
       - name: Flutter analyze
+        script: flutter analyze || true
+
+      - name: Build IPA
+        # $BUILD_NUMBER is Codemagic's auto-incrementing per-workflow counter,
+        # so every TestFlight upload is unique with no extra setup.
+        # Version name comes from pubspec.yaml.
         script: |
-          flutter analyze || true
-      - name: Increment build number
-        script: |
-          BUILD_NUMBER=$(($(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID") + 1))
-          echo "Using build number $BUILD_NUMBER"
           flutter build ipa --release \
-            --build-name=1.0.0 \
             --build-number=$BUILD_NUMBER \
             --export-options-plist=/Users/builder/export_options.plist
+
     artifacts:
       - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
       - flutter_drive.log
+
     publishing:
       app_store_connect:
-        auth: integration # uses the App Store Connect API key configured in Codemagic
+        auth: integration
         submit_to_testflight: true
         # Internal testers get the build immediately. To auto-distribute to an
-        # external group, uncomment and name your group (requires one-time Beta App Review):
+        # external group, uncomment and name it (requires one-time Beta App Review):
         # beta_groups:
         #   - "External Testers"
+
+      email:
+        recipients:
+          - kenjieramos22@gmail.com
+        notify:
+          success: true
+          failure: true
