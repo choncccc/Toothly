@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 import 'dart:io';
 
@@ -11,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:pdfx/pdfx.dart' as pdfx;
+import 'package:printing/printing.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 enum _Mode { none, draw, text, pan }
@@ -169,10 +171,105 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
           _pageAspectRatios.addAll(ratios);
         });
         _restoreSavedRecord();
+        // Scan for the form's ruled lines in the background: it is only needed
+        // once the student taps to type, and it must not delay first paint.
+        for (final entry in images.entries) {
+          unawaited(_detectLines(entry.key, entry.value));
+        }
       }
     } catch (e) {
       if (mounted) setState(() => _error = e.toString());
     }
+  }
+
+  // ── Line snapping ─────────────────────────────────────────────────────────
+
+  /// Vertical positions (as a fraction of page height) of the horizontal rules
+  /// printed on each form, so typed text can be dropped onto a line instead of
+  /// wherever the tap happened to land.
+  final Map<int, List<double>> _pageLines = {};
+
+  /// Scans a rendered page for rows that are mostly dark — the printed rules of
+  /// the chart — and records the centre of each run of such rows.
+  Future<void> _detectLines(int page, Uint8List pngBytes) async {
+    try {
+      final codec = await ui.instantiateImageCodec(pngBytes);
+      final frame = await codec.getNextFrame();
+      final image = frame.image;
+      final data = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      final width = image.width;
+      final height = image.height;
+      image.dispose();
+      codec.dispose();
+      if (data == null || width == 0 || height == 0) return;
+
+      final pixels = data.buffer.asUint8List();
+      const step = 4; // sample every 4th pixel across a row; rules are long
+      final samplesPerRow = (width / step).ceil();
+      if (samplesPerRow == 0) return;
+
+      final lines = <double>[];
+      int runStart = -1;
+      for (int y = 0; y < height; y++) {
+        int dark = 0;
+        for (int x = 0; x < width; x += step) {
+          final i = (y * width + x) * 4;
+          if (pixels[i] < 128 && pixels[i + 1] < 128 && pixels[i + 2] < 128) {
+            dark++;
+          }
+        }
+        // A rule spans most of the width; text and boxes do not.
+        final isRule = dark / samplesPerRow > 0.5;
+        if (isRule && runStart < 0) {
+          runStart = y;
+        } else if (!isRule && runStart >= 0) {
+          lines.add(((runStart + y - 1) / 2) / height);
+          runStart = -1;
+        }
+      }
+      if (runStart >= 0) lines.add(((runStart + height - 1) / 2) / height);
+
+      if (lines.isNotEmpty && mounted) _pageLines[page] = lines;
+    } catch (_) {
+      // Snapping is a convenience — fall back to the raw tap position.
+    }
+  }
+
+  /// Nudges [position] onto the nearest printed rule when the tap is already
+  /// close to one, seating the text on the line the way it would be written by
+  /// hand. Taps far from any rule are left exactly where they were made.
+  Offset _snapToLine(int page, Offset position, double fontSize) {
+    final lines = _pageLines[page];
+    final size = _pageSizes[page];
+    if (lines == null || lines.isEmpty || size == null || size.height == 0) {
+      return position;
+    }
+    final ratio = position.dy / size.height;
+    double? nearest;
+    double nearestDistance = double.infinity;
+    for (final line in lines) {
+      final distance = (line - ratio).abs();
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = line;
+      }
+    }
+    // Only snap within ~2.5% of the page height, so deliberate placement in
+    // open space is respected.
+    if (nearest == null || nearestDistance > 0.025) return position;
+    // position.dy is the vertical centre of the label, so lift it by roughly
+    // half a line to sit the text on top of the rule rather than through it.
+    return Offset(position.dx, nearest * size.height - fontSize * 0.45);
+  }
+
+  /// Keeps a label inside the page bounds.
+  Offset _clampToPage(int page, Offset position) {
+    final size = _pageSizes[page];
+    if (size == null) return position;
+    return Offset(
+      position.dx.clamp(0.0, size.width),
+      position.dy.clamp(0.0, size.height),
+    );
   }
 
   // ── Record persistence ────────────────────────────────────────────────────
@@ -522,12 +619,122 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     }
     setState(() {
       _drawingPage = page;
-      _active = _Stroke(
-        [d.localPosition],
-        _erasing ? Colors.white : _color,
-        _erasing ? 22.0 : _penWidth,
-      );
+      _active = _Stroke([d.localPosition], _color, _penWidth);
     });
+  }
+
+  // ── Eraser ────────────────────────────────────────────────────────────────
+  //
+  // Removes what was drawn rather than painting white over it, so the printed
+  // chart underneath survives being erased.
+
+  static const double _eraserRadius = 16.0;
+
+  // Everything lifted during the current erase drag, so one swipe undoes as a
+  // single action instead of one per stroke.
+  final List<_Stroke> _erasedStrokes = [];
+  final List<_TextLabel> _erasedLabels = [];
+
+  void _startErase(DragStartDetails d, int page) {
+    _erasedStrokes.clear();
+    _erasedLabels.clear();
+    _drawingPage = page;
+    _eraseAt(page, d.localPosition);
+  }
+
+  void _updateErase(DragUpdateDetails d, int page) {
+    if (_drawingPage != page) return;
+    _eraseAt(page, d.localPosition);
+  }
+
+  void _endErase(int page) {
+    final strokes = List<_Stroke>.from(_erasedStrokes);
+    final labels = List<_TextLabel>.from(_erasedLabels);
+    _erasedStrokes.clear();
+    _erasedLabels.clear();
+    _drawingPage = -1;
+    if (strokes.isEmpty && labels.isEmpty) return;
+    // setState so the undo button picks up the new action.
+    setState(() {});
+    _pushAction(
+      _Action(
+        undo: () {
+          _strokesFor(page).addAll(strokes);
+          _textLabelsFor(page).addAll(labels);
+        },
+        redo: () {
+          _strokesFor(page).removeWhere(strokes.contains);
+          _textLabelsFor(page).removeWhere(labels.contains);
+        },
+      ),
+    );
+  }
+
+  void _eraseAt(int page, Offset point) {
+    final strokes = _strokesFor(page);
+    final labels = _textLabelsFor(page);
+    final hitStrokes =
+        strokes.where((s) => _strokeNear(s, point, _eraserRadius)).toList();
+    final hitLabels =
+        labels.where((l) => _labelNear(l, point, _eraserRadius)).toList();
+    if (hitStrokes.isEmpty && hitLabels.isEmpty) return;
+    setState(() {
+      for (final s in hitStrokes) {
+        strokes.remove(s);
+        _erasedStrokes.add(s);
+      }
+      for (final l in hitLabels) {
+        labels.remove(l);
+        _erasedLabels.add(l);
+      }
+    });
+  }
+
+  static bool _strokeNear(_Stroke s, Offset p, double radius) {
+    final reach = radius + s.width / 2;
+    if (s.points.length == 1) return (s.points.first - p).distance <= reach;
+    for (int i = 0; i < s.points.length - 1; i++) {
+      if (_distanceToSegment(p, s.points[i], s.points[i + 1]) <= reach) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static double _distanceToSegment(Offset p, Offset a, Offset b) {
+    final ab = b - a;
+    final lengthSquared = ab.dx * ab.dx + ab.dy * ab.dy;
+    if (lengthSquared == 0) return (p - a).distance;
+    final t =
+        (((p.dx - a.dx) * ab.dx + (p.dy - a.dy) * ab.dy) / lengthSquared)
+            .clamp(0.0, 1.0);
+    return (p - Offset(a.dx + ab.dx * t, a.dy + ab.dy * t)).distance;
+  }
+
+  bool _labelNear(_TextLabel l, Offset p, double radius) {
+    return _labelRect(l).inflate(radius).contains(p);
+  }
+
+  /// On-page bounds of a label. The widget is shifted up by half its height by
+  /// the FractionalTranslation it is drawn with, so [_TextLabel.position] is the
+  /// vertical centre, not the top edge.
+  Rect _labelRect(_TextLabel l) {
+    final painter = TextPainter(
+      text: TextSpan(
+        text: l.text,
+        style: TextStyle(
+          fontSize: l.fontSize,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    return Rect.fromLTWH(
+      l.position.dx,
+      l.position.dy - painter.size.height / 2,
+      painter.size.width,
+      painter.size.height,
+    );
   }
 
   void _updateStroke(DragUpdateDetails d, int page) {
@@ -652,7 +859,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     );
     if (result != null && result.text.isNotEmpty && mounted) {
       final label = _TextLabel(
-        position: position,
+        position: _snapToLine(page, position, result.fontSize),
         text: result.text,
         color: _color,
         fontSize: result.fontSize,
@@ -743,30 +950,53 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     return f.path;
   }
 
-  Future<void> _exportPdf() async {
-    // File the record first so the export is never the only copy, and so the
-    // PDF can be named after the patient rather than just the form.
-    if (!await _persistRecord()) return;
-    if (!mounted) return;
-    setState(() => _saving = true);
-    try {
-      // Reset zoom on all pages so the rendered snapshot is the full page.
-      for (final c in _zoomControllers.values) {
-        c.value = Matrix4.identity();
-      }
-      await WidgetsBinding.instance.endOfFrame;
+  /// Renders the annotated chart plus its companion forms into a single PDF.
+  /// Shared by the save and print flows so both produce an identical document.
+  Future<Uint8List> _buildPdfBytes() async {
+    // Reset zoom on all pages so the rendered snapshot is the full page.
+    for (final c in _zoomControllers.values) {
+      c.value = Matrix4.identity();
+    }
+    await WidgetsBinding.instance.endOfFrame;
 
-      final pdfDoc = pw.Document();
+    final pdfDoc = pw.Document();
 
-      for (int page = 1; page <= (_doc?.pagesCount ?? 0); page++) {
-        final key = _repaintKeys[page];
-        if (key?.currentContext == null) continue;
-        final boundary =
-            key!.currentContext!.findRenderObject() as RenderRepaintBoundary;
-        final image = await boundary.toImage(pixelRatio: 2.0);
-        final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-        final bytes = byteData!.buffer.asUint8List();
-        final aspectRatio = image.width / image.height;
+    for (int page = 1; page <= (_doc?.pagesCount ?? 0); page++) {
+      final key = _repaintKeys[page];
+      if (key?.currentContext == null) continue;
+      final boundary =
+          key!.currentContext!.findRenderObject() as RenderRepaintBoundary;
+      final image = await boundary.toImage(pixelRatio: 2.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      final bytes = byteData!.buffer.asUint8List();
+      final aspectRatio = image.width / image.height;
+      final pageHeight = PdfPageFormat.a4.width / aspectRatio;
+      pdfDoc.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat(
+            PdfPageFormat.a4.width,
+            pageHeight,
+            marginAll: 0,
+          ),
+          build: (_) => pw.Image(pw.MemoryImage(bytes), fit: pw.BoxFit.fill),
+        ),
+      );
+    }
+
+    for (final assetPath in widget.companionPdfPaths) {
+      final compBytes = await _loadAssetBytes(assetPath);
+      final compDoc = await pdfx.PdfDocument.openData(compBytes);
+      for (int i = 1; i <= compDoc.pagesCount; i++) {
+        final page = await compDoc.getPage(i);
+        final img = await page.render(
+          width: page.width * 2,
+          height: page.height * 2,
+          format: pdfx.PdfPageImageFormat.png,
+          backgroundColor: '#ffffff',
+        );
+        await page.close();
+        if (img == null) continue;
+        final aspectRatio = (img.width ?? 1) / (img.height ?? 1);
         final pageHeight = PdfPageFormat.a4.width / aspectRatio;
         pdfDoc.addPage(
           pw.Page(
@@ -775,46 +1005,58 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
               pageHeight,
               marginAll: 0,
             ),
-            build: (_) => pw.Image(pw.MemoryImage(bytes), fit: pw.BoxFit.fill),
+            build: (_) =>
+                pw.Image(pw.MemoryImage(img.bytes), fit: pw.BoxFit.fill),
           ),
         );
       }
+      await compDoc.close();
+    }
 
-      for (final assetPath in widget.companionPdfPaths) {
-        final compBytes = await _loadAssetBytes(assetPath);
-        final compDoc = await pdfx.PdfDocument.openData(compBytes);
-        for (int i = 1; i <= compDoc.pagesCount; i++) {
-          final page = await compDoc.getPage(i);
-          final img = await page.render(
-            width: page.width * 2,
-            height: page.height * 2,
-            format: pdfx.PdfPageImageFormat.png,
-            backgroundColor: '#ffffff',
-          );
-          await page.close();
-          if (img == null) continue;
-          final aspectRatio = (img.width ?? 1) / (img.height ?? 1);
-          final pageHeight = PdfPageFormat.a4.width / aspectRatio;
-          pdfDoc.addPage(
-            pw.Page(
-              pageFormat: PdfPageFormat(
-                PdfPageFormat.a4.width,
-                pageHeight,
-                marginAll: 0,
-              ),
-              build: (_) =>
-                  pw.Image(pw.MemoryImage(img.bytes), fit: pw.BoxFit.fill),
-            ),
-          );
-        }
-        await compDoc.close();
+    return pdfDoc.save();
+  }
+
+  /// Filename stem for exports and print jobs: patient first, then the form.
+  String get _documentName {
+    final patient = (_patientName ?? 'patient')
+        .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
+    return '${patient}_${widget.title.replaceAll(' ', '_')}';
+  }
+
+  /// Hands the chart to the system print dialog — AirPrint on iOS, the Android
+  /// print service otherwise — so a copy can be printed without exporting and
+  /// hunting for the file first.
+  Future<void> _printPdf() async {
+    if (!await _persistRecord()) return;
+    if (!mounted) return;
+    setState(() => _saving = true);
+    try {
+      final bytes = await _buildPdfBytes();
+      await Printing.layoutPdf(
+        onLayout: (_) async => bytes,
+        name: _documentName,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Could not print: $e')));
       }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
 
-      final pdfBytes = await pdfDoc.save();
-      final patient = (_patientName ?? 'patient')
-          .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
+  Future<void> _exportPdf() async {
+    // File the record first so the export is never the only copy, and so the
+    // PDF can be named after the patient rather than just the form.
+    if (!await _persistRecord()) return;
+    if (!mounted) return;
+    setState(() => _saving = true);
+    try {
+      final pdfBytes = await _buildPdfBytes();
       final fileName =
-          '${patient}_${widget.title.replaceAll(' ', '_')}_${DateTime.now().millisecondsSinceEpoch}.pdf';
+          '${_documentName}_${DateTime.now().millisecondsSinceEpoch}.pdf';
 
       await _ensureStoragePermission();
       await _writePdfBytes(pdfBytes, fileName);
@@ -868,6 +1110,11 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
             icon: const Icon(Icons.redo),
             onPressed: _redoStack.isEmpty ? null : _redo,
             tooltip: 'Redo',
+          ),
+          IconButton(
+            icon: const Icon(Icons.print_outlined),
+            onPressed: _saving ? null : _printPdf,
+            tooltip: 'Print',
           ),
           IconButton(
             icon: const Icon(Icons.bookmark_add_outlined),
@@ -1162,15 +1409,21 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                                   },
                                   child: GestureDetector(
                                     behavior: HitTestBehavior.opaque,
-                                    onPanStart: _mode == _Mode.draw
-                                        ? (d) => _startStroke(d, page)
-                                        : null,
-                                    onPanUpdate: _mode == _Mode.draw
-                                        ? (d) => _updateStroke(d, page)
-                                        : null,
-                                    onPanEnd: _mode == _Mode.draw
-                                        ? (d) => _endStroke(d, page)
-                                        : null,
+                                    onPanStart: _mode != _Mode.draw
+                                        ? null
+                                        : _erasing
+                                            ? (d) => _startErase(d, page)
+                                            : (d) => _startStroke(d, page),
+                                    onPanUpdate: _mode != _Mode.draw
+                                        ? null
+                                        : _erasing
+                                            ? (d) => _updateErase(d, page)
+                                            : (d) => _updateStroke(d, page),
+                                    onPanEnd: _mode != _Mode.draw
+                                        ? null
+                                        : _erasing
+                                            ? (_) => _endErase(page)
+                                            : (d) => _endStroke(d, page),
                                     onTapUp: _mode == _Mode.text
                                         ? (d) {
                                             if (_isLocked(
@@ -1223,11 +1476,20 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                                       );
                                     },
                                     onPanUpdate: (d) {
+                                      // d.delta is in screen pixels while the
+                                      // label is positioned in page pixels, so
+                                      // at any zoom other than 1x an uncorrected
+                                      // delta makes the text outrun the finger.
+                                      final scale = _scaleFor(page);
+                                      final next = label.position +
+                                          (scale == 0 ? d.delta : d.delta / scale);
                                       // Don't let a label be dragged into the
-                                      // protected patient field.
-                                      final next = label.position + d.delta;
+                                      // protected patient field, or off the page.
                                       if (_isLocked(page, next)) return;
-                                      setState(() => label.position = next);
+                                      setState(
+                                        () => label.position =
+                                            _clampToPage(page, next),
+                                      );
                                     },
                                     child: FractionalTranslation(
                                       translation: const Offset(0.0, -0.5),
