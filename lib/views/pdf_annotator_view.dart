@@ -383,34 +383,14 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     }
   }
 
-  /// Prompts for the patient this chart belongs to. Name is required; the code
-  /// is optional so the app works whether or not the clinic issues one.
-  /// Returns false when the student cancels.
-  Future<bool> _askPatientInfo() async {
-    final result = await showDialog<_PatientDialogResult>(
-      context: context,
-      builder: (_) => _PatientInfoDialog(
-        initialName: _patientName ?? '',
-        initialCode: _patientCode ?? '',
-      ),
-    );
-    if (result == null) return false;
-    _patientName = result.name;
-    _patientCode = result.code;
-    return true;
-  }
-
-  /// Writes the current annotations to the patient's record, asking who the
-  /// patient is the first time. Returns false when the student cancels out of
-  /// the patient prompt.
+  /// Writes the current annotations to the patient's record. The card/control
+  /// number is issued by the app on first save — never typed — which is why the
+  /// matching field on the chart is a locked region.
   Future<bool> _persistRecord() async {
-    if (_patientName == null || _patientName!.isEmpty) {
-      final provided = await _askPatientInfo();
-      if (!provided) return false;
-    }
+    _patientCode ??= await RecordStore.instance.nextPatientCode(_category);
     final id = await RecordStore.instance.save(
       id: _recordId,
-      patientName: _patientName!,
+      patientName: _patientName ?? '',
       patientCode: _patientCode,
       category: _category,
       formTitle: widget.title,
@@ -430,7 +410,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
         SnackBar(
           backgroundColor: const Color(0xFF5D4B8A),
           content: Text(
-            'Saved to $_category · $_patientName',
+            'Saved to $_category · $_patientCode',
             style: const TextStyle(color: Colors.white),
           ),
           duration: const Duration(seconds: 2),
@@ -954,7 +934,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
 
   /// Filename stem for exports and print jobs: patient first, then the form.
   String get _documentName {
-    final patient = (_patientName ?? 'patient')
+    final patient = (_patientCode ?? _patientName ?? 'patient')
         .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
     return '${patient}_${widget.title.replaceAll(' ', '_')}';
   }
@@ -1551,123 +1531,6 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
 }
 
 // ── Text input dialog ─────────────────────────────────────────────────────────
-
-class _PatientDialogResult {
-  final String name;
-  final String code;
-  const _PatientDialogResult(this.name, this.code);
-}
-
-class _PatientInfoDialog extends StatefulWidget {
-  final String initialName;
-  final String initialCode;
-
-  const _PatientInfoDialog({
-    required this.initialName,
-    required this.initialCode,
-  });
-
-  @override
-  State<_PatientInfoDialog> createState() => _PatientInfoDialogState();
-}
-
-class _PatientInfoDialogState extends State<_PatientInfoDialog> {
-  late final TextEditingController _nameController;
-  late final TextEditingController _codeController;
-  final _formKey = GlobalKey<FormState>();
-
-  @override
-  void initState() {
-    super.initState();
-    _nameController = TextEditingController(text: widget.initialName);
-    _codeController = TextEditingController(text: widget.initialCode);
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _codeController.dispose();
-    super.dispose();
-  }
-
-  void _submit() {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-    Navigator.pop(
-      context,
-      _PatientDialogResult(
-        _nameController.text.trim(),
-        _codeController.text.trim(),
-      ),
-    );
-  }
-
-  InputDecoration _decoration(String label, String hint) => InputDecoration(
-        labelText: label,
-        hintText: hint,
-        labelStyle: const TextStyle(color: Colors.white70),
-        hintStyle: const TextStyle(color: Colors.white30),
-        errorStyle: const TextStyle(color: Colors.redAccent),
-        enabledBorder: const UnderlineInputBorder(
-          borderSide: BorderSide(color: Colors.white24),
-        ),
-        focusedBorder: const UnderlineInputBorder(
-          borderSide: BorderSide(color: Color(0xFF8F6BFF)),
-        ),
-      );
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: const Color(0xFF2D2D44),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      title: const Text(
-        'Patient details',
-        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-      ),
-      content: Form(
-        key: _formKey,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextFormField(
-              controller: _nameController,
-              style: const TextStyle(color: Colors.white),
-              autofocus: true,
-              textCapitalization: TextCapitalization.words,
-              textInputAction: TextInputAction.next,
-              decoration: _decoration('Patient name', 'Juan Dela Cruz'),
-              validator: (v) => (v == null || v.trim().isEmpty)
-                  ? 'Patient name is required'
-                  : null,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _codeController,
-              style: const TextStyle(color: Colors.white),
-              textCapitalization: TextCapitalization.characters,
-              textInputAction: TextInputAction.done,
-              decoration: _decoration('Patient code (optional)', 'PED-001'),
-              onFieldSubmitted: (_) => _submit(),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
-        ),
-        FilledButton(
-          style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFF8F6BFF),
-          ),
-          onPressed: _submit,
-          child: const Text('Save'),
-        ),
-      ],
-    );
-  }
-}
 
 class _TextInputDialog extends StatefulWidget {
   final String initialText;

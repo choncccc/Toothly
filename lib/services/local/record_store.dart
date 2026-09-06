@@ -67,11 +67,14 @@ class PatientRecord {
             DateTime.fromMillisecondsSinceEpoch(m['updated_at'] as int),
       );
 
-  /// Label shown on cards: "Juan Dela Cruz · PED-001" or just the name.
+  /// Label shown on cards. The code is always present and is the record's
+  /// identity; a name is optional and only shown once one has been added.
   String get displayLabel {
-    final code = patientCode?.trim();
-    if (code == null || code.isEmpty) return patientName;
-    return '$patientName · $code';
+    final code = patientCode?.trim() ?? '';
+    final name = patientName.trim();
+    if (name.isEmpty) return code.isEmpty ? 'Unnamed record' : code;
+    if (code.isEmpty) return name;
+    return '$code · $name';
   }
 }
 
@@ -203,6 +206,43 @@ class RecordStore {
     return rows.map(PatientRecord.fromMap).toList();
   }
 
+  /// Short prefix per department, used to build patient codes.
+  static const Map<String, String> _codePrefixes = {
+    'Pediatric': 'PED',
+    'Complete Dentures': 'CD',
+    'Endodontics': 'ENDO',
+    'Exodontia': 'EXO',
+    'Fixed Partial Denture': 'FPD',
+    'Removable Partial Denture': 'RPD',
+    'Restorative': 'RESTO',
+    'Periodontics': 'PERIO',
+  };
+
+  /// Assigns the next patient card/control number for [category], e.g.
+  /// PED-2026-003. The chart's own control-number field is a locked region the
+  /// student cannot write in (see `pdf_locked_regions.dart`) because the code is
+  /// issued here rather than typed by hand.
+  Future<String> nextPatientCode(String category) async {
+    final db = await _database;
+    final prefix = _codePrefixes[category] ?? 'GEN';
+    final year = DateTime.now().year;
+    final stem = '$prefix-$year-';
+    final rows = await db.query(
+      'records',
+      columns: ['patient_code'],
+      where: 'patient_code LIKE ?',
+      whereArgs: ['$stem%'],
+    );
+    var highest = 0;
+    for (final r in rows) {
+      final code = r['patient_code'] as String?;
+      if (code == null) continue;
+      final seq = int.tryParse(code.substring(stem.length));
+      if (seq != null && seq > highest) highest = seq;
+    }
+    return '$stem${(highest + 1).toString().padLeft(3, '0')}';
+  }
+
   Future<PatientRecord?> byId(int id) async {
     final db = await _database;
     final rows = await db.query('records', where: 'id = ?', whereArgs: [id]);
@@ -216,7 +256,7 @@ class RecordStore {
   /// place. Returns the row id either way.
   Future<int> save({
     int? id,
-    required String patientName,
+    String patientName = '',
     String? patientCode,
     required String category,
     required String formTitle,
@@ -244,6 +284,21 @@ class RecordStore {
     }
     await db.update('records', values, where: 'id = ?', whereArgs: [id]);
     return id;
+  }
+
+  /// Attaches or updates the optional patient name on a record. The patient
+  /// code is issued by the app and is never edited.
+  Future<void> renamePatient(int id, String patientName) async {
+    final db = await _database;
+    await db.update(
+      'records',
+      {
+        'patient_name': patientName.trim(),
+        'updated_at': DateTime.now().millisecondsSinceEpoch,
+      },
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<void> delete(int id) async {
