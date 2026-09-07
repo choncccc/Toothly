@@ -10,9 +10,8 @@ workflows:
       app_store_connect: codemagic
 
     environment:
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.toothly.dentistapp
+      vars:
+        BUNDLE_ID: com.toothly.dentistapp
       flutter: stable
       xcode: latest
       cocoapods: default
@@ -28,7 +27,17 @@ workflows:
         script: find . -name "Podfile" -execdir pod install \;
 
       - name: Set up code signing
-        script: xcode-project use-profiles
+        # environment.ios_signing only FETCHES existing profiles and aborts
+        # the build during preparation when none is found. --create makes the
+        # distribution certificate and App Store profile on first run, so no
+        # Mac is needed to generate a CSR by hand.
+        script: |
+          keychain initialize
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create
+          keychain add-certificates
+          xcode-project use-profiles
 
       - name: Flutter analyze
         script: flutter analyze || true
