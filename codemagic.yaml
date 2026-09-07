@@ -12,7 +12,7 @@ workflows:
     environment:
       ios_signing:
         distribution_type: app_store
-        bundle_identifier: com.toothly.app
+        bundle_identifier: com.toothly.dentistapp
       flutter: stable
       xcode: latest
       cocoapods: default
@@ -59,6 +59,7 @@ workflows:
       email:
         recipients:
           - kenjieramos22@gmail.com
+          - psycheabrencillo18@gmail.com
         notify:
           success: true
           failure: true

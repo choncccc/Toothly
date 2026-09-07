@@ -15,7 +15,7 @@ if (keyPropertiesFile.exists()) {
 }
 
 android {
-    namespace = "com.example.toothly"
+    namespace = "com.toothly.dentistapp"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -30,7 +30,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.toothly"
+        applicationId = "com.toothly.dentistapp"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
