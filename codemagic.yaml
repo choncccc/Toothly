@@ -32,6 +32,9 @@ workflows:
         # distribution certificate and App Store profile on first run, so no
         # Mac is needed to generate a CSR by hand.
         script: |
+          # -e so a failure here stops the build instead of being masked by the
+          # trailing query command, -x to echo each command into the log.
+          set -ex
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
@@ -42,9 +45,11 @@ workflows:
           # migrates, which silently drops the signing settings written below.
           flutter build ios --release --config-only --no-codesign
           xcode-project use-profiles
-          # Fail loudly here rather than 20 minutes later in the archive step
-          # if no signing identity actually made it into the keychain.
+          # `security find-identity` exits 0 even when it finds nothing, so
+          # assert on the output rather than trusting its status code.
           security find-identity -p codesigning -v
+          security find-identity -p codesigning -v | grep -q "Apple Distribution" \
+            || { echo "ERROR: no Apple Distribution identity in keychain"; exit 1; }
 
       - name: Flutter analyze
         script: flutter analyze || true
