@@ -45,13 +45,15 @@ class MyApp extends StatelessWidget {
         theme: ThemeData(
           scaffoldBackgroundColor: const Color(0xFFF8F9FF),
           // Smooth, consistent page transitions across all platforms.
-          pageTransitionsTheme: const PageTransitionsTheme(
+          // Not const: CupertinoPageTransitionsBuilder lost its const
+          // constructor in newer Flutter, which breaks the release compile.
+          pageTransitionsTheme: PageTransitionsTheme(
             builders: {
-              TargetPlatform.android: FadeUpwardsPageTransitionsBuilder(),
+              TargetPlatform.android: const FadeUpwardsPageTransitionsBuilder(),
               TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
-              TargetPlatform.windows: FadeUpwardsPageTransitionsBuilder(),
+              TargetPlatform.windows: const FadeUpwardsPageTransitionsBuilder(),
               TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
-              TargetPlatform.linux: FadeUpwardsPageTransitionsBuilder(),
+              TargetPlatform.linux: const FadeUpwardsPageTransitionsBuilder(),
             },
           ),
           inputDecorationTheme: const InputDecorationTheme(
