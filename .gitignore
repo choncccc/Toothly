@@ -44,3 +44,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Signing keys must never be committed
+*.pem
+*.p8
+*.p12
+*.mobileprovision

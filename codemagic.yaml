@@ -10,6 +10,11 @@ workflows:
       app_store_connect: codemagic
 
     environment:
+      groups:
+        # Holds CERTIFICATE_PRIVATE_KEY, the RSA key the distribution
+        # certificate is issued against. Reusing one key across builds means
+        # Apple issues one certificate instead of a new one every run.
+        - signing
       vars:
         BUNDLE_ID: com.toothly.dentistapp
       flutter: stable
@@ -38,6 +43,7 @@ workflows:
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
+            --certificate-key=@env:CERTIFICATE_PRIVATE_KEY \
             --create
           keychain add-certificates
           # Let Flutter run its project migrations (deployment target, UIScene,
