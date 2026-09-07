@@ -17,7 +17,11 @@ workflows:
         - signing
       vars:
         BUNDLE_ID: com.toothly.dentistapp
-      flutter: stable
+      # Pinned to match the local SDK. On `stable` the CI picks up a newer
+      # release than any dev machine here, so code that builds locally can
+      # still fail on CI - which is exactly how the page transition errors
+      # got through. Bump this deliberately, together with local upgrades.
+      flutter: 3.35.7
       xcode: latest
       cocoapods: default
 
