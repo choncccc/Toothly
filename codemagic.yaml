@@ -37,7 +37,14 @@ workflows:
             --type IOS_APP_STORE \
             --create
           keychain add-certificates
+          # Let Flutter run its project migrations (deployment target, UIScene,
+          # SPM) FIRST. `flutter build ipa` rewrites project.pbxproj when it
+          # migrates, which silently drops the signing settings written below.
+          flutter build ios --release --config-only --no-codesign
           xcode-project use-profiles
+          # Fail loudly here rather than 20 minutes later in the archive step
+          # if no signing identity actually made it into the keychain.
+          security find-identity -p codesigning -v
 
       - name: Flutter analyze
         script: flutter analyze || true
