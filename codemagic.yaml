@@ -53,10 +53,18 @@ workflows:
         # $BUILD_NUMBER is Codemagic's auto-incrementing per-workflow counter,
         # so every TestFlight upload is unique with no extra setup.
         # Version name comes from pubspec.yaml.
+        #
+        # `flutter build ipa` insists on finding a *development* certificate
+        # before it will archive, and an App Store build only ever has an
+        # Apple Distribution one. Build unsigned with Flutter, then archive
+        # and export with Codemagic's tooling, which signs using the profiles
+        # fetched above.
         script: |
-          flutter build ipa --release \
-            --build-number=$BUILD_NUMBER \
-            --export-options-plist=/Users/builder/export_options.plist
+          flutter build ios --release --no-codesign \
+            --build-number=$BUILD_NUMBER
+          xcode-project build-ipa \
+            --workspace ios/Runner.xcworkspace \
+            --scheme Runner
 
     artifacts:
       - build/ios/ipa/*.ipa
