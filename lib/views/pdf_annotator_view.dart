@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -24,10 +26,59 @@ class _Action {
 }
 
 class _Stroke {
+  /// Mutable so the in-progress stroke can grow in place. Copying the list on
+  /// every pointer move made long strokes quadratic, which showed up as ink
+  /// lagging behind and then skipping.
   final List<Offset> points;
   final Color color;
   final double width;
-  const _Stroke(this.points, this.color, this.width);
+  _Stroke(this.points, this.color, this.width);
+
+  _Stroke copyWithPoints(List<Offset> pts) => _Stroke(pts, color, width);
+}
+
+/// Holds the stroke currently under the pointer, outside the widget tree.
+///
+/// Drawing used to append each point with `setState`, which rebuilt the page
+/// image, every text label and every committed stroke between one pointer move
+/// and the next. At stylus sampling rates the framework could not keep up and
+/// dropped points, which is what made lines come out broken. Notifying only the
+/// ink layer keeps the pen at the same rate as the hardware.
+class _ActiveStroke extends ChangeNotifier {
+  _Stroke? stroke;
+  int page = -1;
+
+  void begin(int page, _Stroke s) {
+    this.page = page;
+    stroke = s;
+    notifyListeners();
+  }
+
+  void extend(Offset p) {
+    final s = stroke;
+    if (s == null) return;
+    // Drop sub-pixel moves: they cost a repaint and a path segment without
+    // being visible.
+    if ((p - s.points.last).distanceSquared < 0.5) return;
+    s.points.add(p);
+    notifyListeners();
+  }
+
+  /// Hands the finished stroke over and clears the layer.
+  _Stroke? take() {
+    final s = stroke;
+    stroke = null;
+    page = -1;
+    if (s != null) notifyListeners();
+    return s;
+  }
+
+  void discard() {
+    if (stroke == null) return;
+    stroke = null;
+    page = -1;
+    notifyListeners();
+  }
 }
 
 class _TextLabel {
@@ -41,6 +92,49 @@ class _TextLabel {
     required this.color,
     required this.fontSize,
   });
+}
+
+/// A horizontal rule printed on the form, normalised to the page: the line
+/// [y] sits at, spanning [left] to [right].
+class _RuleLine {
+  final double y;
+  final double left;
+  final double right;
+  const _RuleLine(this.y, this.left, this.right);
+}
+
+/// Dark runs from consecutive scan rows, stacked while they keep overlapping.
+/// A band that stays thin is a rule; a thick one is printed text.
+class _RuleBand {
+  final int top;
+  int bottom;
+  double left;
+  double right;
+  bool extendedThisRow = false;
+  _RuleBand(this.top, this.left, this.right) : bottom = top;
+}
+
+/// The open band a run belongs to: the one it overlaps by most of the shorter
+/// of the two, which keeps a long rule from swallowing a short tick that
+/// happens to sit under it.
+_RuleBand? _bandOver(List<_RuleBand> open, int start, int end) {
+  for (final band in open) {
+    final overlap =
+        math.min(band.right, end.toDouble()) -
+        math.max(band.left, start.toDouble());
+    if (overlap <= 0) continue;
+    final shorter = math.min(band.right - band.left, (end - start).toDouble());
+    if (shorter > 0 && overlap / shorter > 0.6) return band;
+  }
+  return null;
+}
+
+/// Where a pointer is and what put it there, so a resting palm can be told
+/// apart from a deliberate two-finger scroll.
+class _PointerSample {
+  Offset position;
+  final PointerDeviceKind kind;
+  _PointerSample(this.position, this.kind);
 }
 
 class _TextDialogResult {
@@ -89,10 +183,30 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
   final Map<int, Size> _pageSizes = {};
   final ScrollController _scrollController = ScrollController();
 
-  _Stroke? _active;
+  final _ActiveStroke _active = _ActiveStroke();
+
+  /// Page the erase drag in progress belongs to, or -1. Strokes track their own
+  /// page on [_ActiveStroke].
   int _drawingPage = -1;
+
+  /// Pointer that owns the stroke or erase in progress, and the kind of device
+  /// it came from. A stylus keeps its stroke when a finger or palm lands, so
+  /// resting a hand on the tablet while writing does not break the line.
+  int? _drawPointer;
+  PointerDeviceKind? _drawPointerKind;
+  Offset? _pointerDownAt;
+
+  /// Every pointer currently down anywhere on the document, in global
+  /// coordinates. Two fingers means "scroll the chart" — previously the thin
+  /// handle down the side was the only way to move through the pages.
+  final Map<int, _PointerSample> _pointers = {};
+  double? _twoFingerSpread;
+  double? _lastFocalY;
+  bool _pinching = false;
+
   Color _color = Colors.blue;
   double _penWidth = 3.0;
+  double _eraserWidth = 8.0;
   double _textSize = 16.0;
   bool _erasing = false;
   _Mode _mode = _Mode.draw;
@@ -108,7 +222,8 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
   String? _patientCode;
 
   String get _category =>
-      widget.category ?? RecordStore.categoryForTemplate(widget.editablePdfPath);
+      widget.category ??
+      RecordStore.categoryForTemplate(widget.editablePdfPath);
 
   static const _colors = [
     Colors.blue,
@@ -126,11 +241,27 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       _recordId = existing.id;
       _patientCode = existing.patientCode;
     }
+    if (_patientCode == null) unawaited(_assignPatientCode());
     _loadDocument();
+  }
+
+  /// Issues the card/control number as the chart opens rather than at save
+  /// time, so it can be stamped into the form's own control-number field right
+  /// away. Numbers are derived from the saved rows, so one handed out here and
+  /// then abandoned is simply offered again next time.
+  Future<void> _assignPatientCode() async {
+    try {
+      final code = await RecordStore.instance.nextPatientCode(_category);
+      if (!mounted) return;
+      setState(() => _patientCode ??= code);
+    } catch (_) {
+      // Not worth failing the chart over: _persistRecord assigns one on save.
+    }
   }
 
   @override
   void dispose() {
+    _active.dispose();
     _scrollController.dispose();
     for (final c in _zoomControllers.values) {
       c.dispose();
@@ -180,10 +311,9 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
 
   // ── Line snapping ─────────────────────────────────────────────────────────
 
-  /// Vertical positions (as a fraction of page height) of the horizontal rules
-  /// printed on each form, so typed text can be dropped onto a line instead of
-  /// wherever the tap happened to land.
-  final Map<int, List<double>> _pageLines = {};
+  /// The horizontal rules printed on each form, so typed text can be dropped
+  /// onto the line it belongs to instead of wherever the tap happened to land.
+  final Map<int, List<_RuleLine>> _pageLines = {};
 
   /// Scans pages one at a time. Each scan decodes a page to raw RGBA — tens of
   /// megabytes for an A4 page at 2x — so running them concurrently would hold
@@ -196,8 +326,16 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     }
   }
 
-  /// Scans a rendered page for rows that are mostly dark — the printed rules of
-  /// the chart — and records the centre of each run of such rows.
+  /// Scans a rendered page for the printed rules of the chart.
+  ///
+  /// The earlier pass only accepted rows that were dark across more than half
+  /// the page, which almost no form satisfies — the rules are field-length, a
+  /// few inches at most — so nothing was found and typed text simply stayed
+  /// wherever the finger landed. This instead collects every long horizontal
+  /// run of dark pixels, stacks the runs that sit on top of each other into a
+  /// band, and keeps the bands that are thin. Thinness is what separates a rule
+  /// from a row of printed labels: a rule is two or three pixels tall, a line
+  /// of text twenty.
   Future<void> _detectLines(int page, Uint8List pngBytes) async {
     try {
       final codec = await ui.instantiateImageCodec(pngBytes);
@@ -208,66 +346,190 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       final height = image.height;
       image.dispose();
       codec.dispose();
-      if (data == null || width == 0 || height == 0) return;
+      if (data == null || width < 8 || height < 8) return;
 
       final pixels = data.buffer.asUint8List();
-      const step = 4; // sample every 4th pixel across a row; rules are long
-      final samplesPerRow = (width / step).ceil();
-      if (samplesPerRow == 0) return;
+      const xStep = 2;
+      const yStep = 2;
+      // Shorter than this and it is a tick, a letter or the corner of a box
+      // rather than something to write on.
+      final minRun = math.max(24, (width * 0.06).round());
+      // Rules are often broken or dotted; bridge small gaps but not the spaces
+      // between letters.
+      final maxGap = math.max(2, (width * 0.004).round());
+      final maxThickness = math.max(3.0, height * 0.006);
 
-      final lines = <double>[];
-      int runStart = -1;
-      const rowStep = 2;
-      for (int y = 0; y < height; y += rowStep) {
-        int dark = 0;
-        for (int x = 0; x < width; x += step) {
-          final i = (y * width + x) * 4;
-          if (pixels[i] < 128 && pixels[i + 1] < 128 && pixels[i + 2] < 128) {
-            dark++;
+      final rules = <_RuleLine>[];
+      final open = <_RuleBand>[];
+
+      void close(_RuleBand band) {
+        if (band.bottom - band.top > maxThickness) return;
+        rules.add(
+          _RuleLine(
+            ((band.top + band.bottom) / 2) / height,
+            band.left / width,
+            band.right / width,
+          ),
+        );
+      }
+
+      for (int y = 0; y < height; y += yStep) {
+        final runs = _darkRunsInRow(pixels, width, y, xStep, minRun, maxGap);
+        for (final band in open) {
+          band.extendedThisRow = false;
+        }
+        for (final run in runs) {
+          final band = _bandOver(open, run[0], run[1]);
+          if (band == null) {
+            open.add(
+              _RuleBand(y, run[0].toDouble(), run[1].toDouble())
+                ..extendedThisRow = true,
+            );
+          } else {
+            band.bottom = y;
+            band.left = math.min(band.left, run[0].toDouble());
+            band.right = math.max(band.right, run[1].toDouble());
+            band.extendedThisRow = true;
           }
         }
-        // A rule spans most of the width; text and boxes do not.
-        final isRule = dark / samplesPerRow > 0.5;
-        if (isRule && runStart < 0) {
-          runStart = y;
-        } else if (!isRule && runStart >= 0) {
-          lines.add(((runStart + y - rowStep) / 2) / height);
-          runStart = -1;
-        }
+        open.removeWhere((band) {
+          if (band.extendedThisRow) return false;
+          close(band);
+          return true;
+        });
       }
-      if (runStart >= 0) lines.add(((runStart + height - 1) / 2) / height);
+      for (final band in open) {
+        close(band);
+      }
 
-      if (lines.isNotEmpty && mounted) _pageLines[page] = lines;
+      if (rules.isNotEmpty && mounted) _pageLines[page] = rules;
     } catch (_) {
       // Snapping is a convenience — fall back to the raw tap position.
     }
   }
 
-  /// Nudges [position] onto the nearest printed rule when the tap is already
-  /// close to one, seating the text on the line the way it would be written by
-  /// hand. Taps far from any rule are left exactly where they were made.
-  Offset _snapToLine(int page, Offset position, double fontSize) {
-    final lines = _pageLines[page];
-    final size = _pageSizes[page];
-    if (lines == null || lines.isEmpty || size == null || size.height == 0) {
-      return position;
+  /// The dark runs along one row of [pixels], as `[startX, endX]` pairs.
+  ///
+  /// A run counts only if it is long and nearly solid. A printed rule is a
+  /// continuous line; a row taken through printed text is mostly gaps between
+  /// letters, and text being mistaken for something to write on would put the
+  /// entry straight over the form's own labels.
+  static List<List<int>> _darkRunsInRow(
+    Uint8List pixels,
+    int width,
+    int y,
+    int xStep,
+    int minRun,
+    int maxGap,
+  ) {
+    const minFill = 0.8;
+    final runs = <List<int>>[];
+    var start = -1;
+    var lastDark = -1;
+    var darkSamples = 0;
+
+    void close() {
+      if (start >= 0 && lastDark - start >= minRun) {
+        final samples = (lastDark - start) ~/ xStep + 1;
+        if (darkSamples / samples >= minFill) runs.add([start, lastDark]);
+      }
+      start = -1;
+      darkSamples = 0;
     }
-    final ratio = position.dy / size.height;
-    double? nearest;
-    double nearestDistance = double.infinity;
-    for (final line in lines) {
-      final distance = (line - ratio).abs();
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearest = line;
+
+    for (int x = 0; x < width; x += xStep) {
+      final i = (y * width + x) * 4;
+      final dark =
+          pixels[i] < 140 && pixels[i + 1] < 140 && pixels[i + 2] < 140;
+      if (dark) {
+        if (start < 0) start = x;
+        lastDark = x;
+        darkSamples++;
+      } else if (start >= 0 && x - lastDark > maxGap) {
+        close();
       }
     }
-    // Only snap within ~2.5% of the page height, so deliberate placement in
-    // open space is respected.
-    if (nearest == null || nearestDistance > 0.025) return position;
+    close();
+    return runs;
+  }
+
+  /// Seats [position] on the printed rule the tap belongs to, the way the entry
+  /// would be written by hand. Only rules the tap sits over horizontally are
+  /// considered, so a tap in one column never jumps to a line in another, and a
+  /// tap in genuinely open space is left where it was made.
+  Offset _snapToLine(int page, Offset position, double fontSize) {
+    final rules = _pageLines[page];
+    final size = _pageSizes[page];
+    if (rules == null ||
+        rules.isEmpty ||
+        size == null ||
+        size.height == 0 ||
+        size.width == 0) {
+      return position;
+    }
+    final x = position.dx / size.width;
+    final y = position.dy / size.height;
+
+    _RuleLine? best;
+    var bestDistance = double.infinity;
+    for (final rule in rules) {
+      if (x < rule.left - 0.02 || x > rule.right + 0.02) continue;
+      // Writing sits above its rule, so a rule just below the tap is the
+      // likelier target than one the same distance above it.
+      final distance = y <= rule.y ? rule.y - y : (y - rule.y) * 2.2;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = rule;
+      }
+    }
+    if (best == null || bestDistance > 0.035) return position;
+
     // position.dy is the vertical centre of the label, so lift it by roughly
     // half a line to sit the text on top of the rule rather than through it.
-    return Offset(position.dx, nearest * size.height - fontSize * 0.45);
+    return Offset(
+      position.dx.clamp(best.left * size.width, best.right * size.width),
+      best.y * size.height - fontSize * 0.45,
+    );
+  }
+
+  /// Notes the page's rendered size and carries the annotations with it when it
+  /// changes.
+  ///
+  /// Marks are held in the page's on-screen pixels, so a rotation, a
+  /// split-screen resize, or a record reopened on a different device would
+  /// otherwise leave every stroke and every label at coordinates that no longer
+  /// mean the same place on the form. Rescaling keeps them on the lines they
+  /// were written on. The page sits in an AspectRatio, so both axes scale by the
+  /// same factor and the writing does not distort.
+  void _recordPageSize(int page, Size size) {
+    final previous = _pageSizes[page];
+    _pageSizes[page] = size;
+    if (previous == null ||
+        previous == size ||
+        previous.width <= 0 ||
+        previous.height <= 0 ||
+        size.width <= 0 ||
+        size.height <= 0) {
+      return;
+    }
+    final scaleX = size.width / previous.width;
+    final scaleY = size.height / previous.height;
+
+    for (final stroke in _strokes[page] ?? const <_Stroke>[]) {
+      for (int i = 0; i < stroke.points.length; i++) {
+        stroke.points[i] = Offset(
+          stroke.points[i].dx * scaleX,
+          stroke.points[i].dy * scaleY,
+        );
+      }
+    }
+    for (final label in _textLabels[page] ?? const <_TextLabel>[]) {
+      label.position = Offset(
+        label.position.dx * scaleX,
+        label.position.dy * scaleY,
+      );
+      label.fontSize *= scaleY;
+    }
   }
 
   /// Keeps a label inside the page bounds.
@@ -328,6 +590,14 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
           )
           .toList();
     });
+    // Marks are stored in the page's on-screen pixels, so the size they were
+    // made at has to travel with them: reopened on a rotated tablet or a device
+    // with a different screen, they are scaled back onto the page rather than
+    // landing wherever those pixels now happen to fall.
+    final pageSizes = <String, dynamic>{};
+    _pageSizes.forEach((page, size) {
+      pageSizes['$page'] = [size.width, size.height];
+    });
     return {
       'savedAt': DateTime.now().toIso8601String(),
       'title': widget.title,
@@ -335,6 +605,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       'companionPdfPaths': widget.companionPdfPaths,
       'strokes': strokes,
       'labels': labels,
+      'pageSizes': pageSizes,
     };
   }
 
@@ -343,6 +614,23 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     final labelsJson = (data['labels'] as Map?)?.cast<String, dynamic>();
     _strokes.clear();
     _textLabels.clear();
+
+    // Seed the page sizes the marks were made at. The first real layout then
+    // finds them stale and rescales everything onto the page as it is now —
+    // see [_recordPageSize]. Records written before sizes were stored have
+    // none, and are restored as they always were.
+    final sizesJson = (data['pageSizes'] as Map?)?.cast<String, dynamic>();
+    if (sizesJson != null) {
+      sizesJson.forEach((pageStr, raw) {
+        final page = int.tryParse(pageStr);
+        final pair = raw as List?;
+        if (page == null || pair == null || pair.length < 2) return;
+        final width = (pair[0] as num).toDouble();
+        final height = (pair[1] as num).toDouble();
+        if (width <= 0 || height <= 0) return;
+        _pageSizes[page] = Size(width, height);
+      });
+    }
     if (strokesJson != null) {
       strokesJson.forEach((pageStr, raw) {
         final page = int.tryParse(pageStr);
@@ -524,83 +812,359 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       );
   }
 
-  void _startStroke(DragStartDetails d, int page) {
-    // Block drawing/erasing that begins inside the protected patient field.
-    if (_isLocked(page, d.localPosition)) {
+  // ── Pointer routing ───────────────────────────────────────────────────────
+  //
+  // Input is handled from raw pointer events rather than pan gestures. A pan
+  // recognizer reports nothing until the pointer has travelled kTouchSlop
+  // (~18 logical pixels), so the start of every stroke was discarded and short
+  // marks — a tick, a dot, the tail of a letter — never registered at all.
+  // Raw events also stay out of the gesture arena, so the page's zoom
+  // recognizer can no longer take a quick stroke away from the pen.
+
+  /// How far two fingers have to spread before the gesture is a pinch rather
+  /// than a scroll.
+  static const double _kPinchSlop = 22.0;
+
+  /// How far a pointer may travel and still count as a tap.
+  static const double _kTapSlop = 12.0;
+
+  static bool _isStylus(PointerDeviceKind kind) =>
+      kind == PointerDeviceKind.stylus ||
+      kind == PointerDeviceKind.invertedStylus;
+
+  int get _fingersDown =>
+      _pointers.values.where((p) => p.kind == PointerDeviceKind.touch).length;
+
+  /// Distance between the first two pointers. Fingers that hold their spacing
+  /// are scrolling; fingers that change it are zooming.
+  double? get _pointerSpread {
+    if (_pointers.length < 2) return null;
+    final samples = _pointers.values.toList(growable: false);
+    return (samples[0].position - samples[1].position).distance;
+  }
+
+  /// Mean vertical position of the fingers — the point a two-finger scroll
+  /// follows. Tracking the middle of the hand rather than each pointer's own
+  /// delta keeps the chart moving at the right speed when one finger is doing
+  /// all the travelling.
+  double? get _touchFocalY {
+    var sum = 0.0;
+    var count = 0;
+    for (final sample in _pointers.values) {
+      if (sample.kind != PointerDeviceKind.touch) continue;
+      sum += sample.position.dy;
+      count++;
+    }
+    return count == 0 ? null : sum / count;
+  }
+
+  void _onViewportPointerDown(PointerDownEvent e) {
+    _pointers[e.pointer] = _PointerSample(e.position, e.kind);
+    if (_fingersDown < 2) return;
+    // Two fingers means scroll or pinch. A stylus stroke survives it, so a palm
+    // resting on the tablet cannot break a line; a stroke being drawn with a
+    // finger is dropped, because that same hand is about to scroll.
+    if (_drawPointerKind == null || !_isStylus(_drawPointerKind!)) {
+      _abandonActiveInput();
+    }
+    _twoFingerSpread = _pointerSpread;
+    _lastFocalY = _touchFocalY;
+    _pinching = false;
+  }
+
+  void _onViewportPointerMove(PointerMoveEvent e) {
+    final sample = _pointers[e.pointer];
+    if (sample == null) return;
+    sample.position = e.position;
+
+    if (_mode == _Mode.pan) return; // the scroll view drives itself there
+    if (_pinching || _fingersDown < 2) return;
+
+    final spread = _pointerSpread;
+    final start = _twoFingerSpread;
+    if (spread != null &&
+        start != null &&
+        (spread - start).abs() > _kPinchSlop) {
+      // The fingers are opening or closing: leave the gesture to the zoom.
+      _pinching = true;
+      return;
+    }
+
+    final focal = _touchFocalY;
+    final previous = _lastFocalY;
+    if (focal == null) return;
+    _lastFocalY = focal;
+    if (previous != null) _scrollBy(previous - focal);
+  }
+
+  void _onViewportPointerFinished(PointerEvent e) {
+    _pointers.remove(e.pointer);
+    // Re-seat the focal point so lifting one of three fingers doesn't jump the
+    // page by the distance between them.
+    _lastFocalY = _fingersDown >= 2 ? _touchFocalY : null;
+    if (_pointers.isEmpty) {
+      _twoFingerSpread = null;
+      _pinching = false;
+    }
+  }
+
+  /// Scrolls the chart directly. The list keeps NeverScrollableScrollPhysics so
+  /// that a single finger is always the pen, which is why this drives the
+  /// controller by hand — the same thing [_ScrollHandle] does.
+  void _scrollBy(double delta) {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    if (!position.hasContentDimensions || position.maxScrollExtent <= 0) return;
+    _scrollController.jumpTo(
+      (position.pixels + delta).clamp(0.0, position.maxScrollExtent),
+    );
+  }
+
+  void _onDrawPointerDown(PointerDownEvent e, int page) {
+    if (_drawPointer != null) return;
+    // A finger that joins a touch already on the glass is scrolling, not
+    // drawing. A stylus draws regardless of what else is resting there.
+    if (!_isStylus(e.kind) &&
+        _pointers.keys.any((pointer) => pointer != e.pointer)) {
+      return;
+    }
+    _drawPointer = e.pointer;
+    _drawPointerKind = e.kind;
+    _pointerDownAt = e.localPosition;
+    if (_mode == _Mode.draw) {
+      if (_erasing) {
+        _startErase(page, e.localPosition);
+      } else {
+        _startStroke(page, e.localPosition);
+      }
+    }
+  }
+
+  void _onDrawPointerMove(PointerMoveEvent e, int page) {
+    if (e.pointer != _drawPointer || _mode != _Mode.draw) return;
+    if (_erasing) {
+      _eraseAt(page, e.localPosition);
+    } else {
+      _extendStroke(page, e.localPosition);
+    }
+  }
+
+  void _onDrawPointerUp(PointerUpEvent e, int page) {
+    if (e.pointer != _drawPointer) return;
+    final downAt = _pointerDownAt;
+    _clearDrawPointer();
+    switch (_mode) {
+      case _Mode.draw:
+        if (_erasing) {
+          _endErase(page);
+        } else {
+          _commitActiveStroke(page);
+        }
+      case _Mode.text:
+        // Only a tap places text; a drag was meant for something else.
+        if (downAt == null || (e.localPosition - downAt).distance > _kTapSlop) {
+          return;
+        }
+        if (_isLocked(page, e.localPosition)) {
+          _notifyLocked();
+        } else {
+          _addTextLabel(page, e.localPosition);
+        }
+      case _Mode.pan:
+      case _Mode.none:
+        break;
+    }
+  }
+
+  void _onDrawPointerCancel(PointerCancelEvent e, int page) {
+    if (e.pointer != _drawPointer) return;
+    _clearDrawPointer();
+    if (_mode != _Mode.draw) return;
+    if (_erasing) {
+      _endErase(page);
+    } else {
+      _commitActiveStroke(page);
+    }
+  }
+
+  void _clearDrawPointer() {
+    _drawPointer = null;
+    _drawPointerKind = null;
+    _pointerDownAt = null;
+  }
+
+  /// Drops the input in progress because the gesture turned out to be a scroll,
+  /// so no stray mark is left behind.
+  void _abandonActiveInput() {
+    final page = _drawingPage;
+    _clearDrawPointer();
+    _active.discard();
+    if (_erasing && page > 0) _endErase(page);
+  }
+
+  void _startStroke(int page, Offset position) {
+    // Block drawing that begins inside the protected patient field.
+    if (_isLocked(page, position)) {
       _notifyLocked();
       return;
     }
-    setState(() {
-      _drawingPage = page;
-      _active = _Stroke([d.localPosition], _color, _penWidth);
-    });
+    _active.begin(page, _Stroke([position], _color, _penWidth));
+  }
+
+  void _extendStroke(int page, Offset position) {
+    if (_active.stroke == null || _active.page != page) return;
+    // If the pointer wanders into the protected field, finalize the stroke and
+    // stop drawing for the rest of this drag. Skipping the point alone isn't
+    // enough — the painter connects consecutive points with a straight line, so
+    // a stroke crossing the field would bridge right over it.
+    if (_isLocked(page, position)) {
+      _commitActiveStroke(page);
+      return;
+    }
+    _active.extend(position);
   }
 
   // ── Eraser ────────────────────────────────────────────────────────────────
   //
   // Removes what was drawn rather than painting white over it, so the printed
   // chart underneath survives being erased.
+  //
+  // It takes out only the part of a line it is rubbed over. Erasing used to
+  // delete whole strokes, so touching one wrong tick lifted the entire line it
+  // belonged to; now the stroke is split into the runs of points the eraser
+  // missed and those are kept, which is what makes correcting a small slip
+  // possible.
 
-  static const double _eraserRadius = 16.0;
-
-  // Everything lifted during the current erase drag, so one swipe undoes as a
-  // single action instead of one per stroke.
-  final List<_Stroke> _erasedStrokes = [];
-  final List<_TextLabel> _erasedLabels = [];
-
-  void _startErase(DragStartDetails d, int page) {
-    _erasedStrokes.clear();
-    _erasedLabels.clear();
-    _drawingPage = page;
-    _eraseAt(page, d.localPosition);
+  /// Eraser reach in page pixels. Zoom shrinks it against the page, so zooming
+  /// in is how a small mistake gets rubbed out without touching its neighbours.
+  double _eraserRadiusFor(int page) {
+    final scale = _scaleFor(page);
+    return _eraserWidth / (scale <= 0 ? 1.0 : scale);
   }
 
-  void _updateErase(DragUpdateDetails d, int page) {
-    if (_drawingPage != page) return;
-    _eraseAt(page, d.localPosition);
+  /// Page contents as they were when the current erase drag started, so one
+  /// swipe undoes as a single action however many fragments it produced.
+  List<_Stroke>? _strokesBeforeErase;
+  List<_TextLabel>? _labelsBeforeErase;
+
+  void _startErase(int page, Offset position) {
+    _drawingPage = page;
+    _strokesBeforeErase = List<_Stroke>.from(_strokesFor(page));
+    _labelsBeforeErase = List<_TextLabel>.from(_textLabelsFor(page));
+    _eraseAt(page, position);
   }
 
   void _endErase(int page) {
-    final strokes = List<_Stroke>.from(_erasedStrokes);
-    final labels = List<_TextLabel>.from(_erasedLabels);
-    _erasedStrokes.clear();
-    _erasedLabels.clear();
+    final strokesBefore = _strokesBeforeErase;
+    final labelsBefore = _labelsBeforeErase;
+    _strokesBeforeErase = null;
+    _labelsBeforeErase = null;
     _drawingPage = -1;
-    if (strokes.isEmpty && labels.isEmpty) return;
+    if (strokesBefore == null || labelsBefore == null) return;
+
+    final strokesAfter = List<_Stroke>.from(_strokesFor(page));
+    final labelsAfter = List<_TextLabel>.from(_textLabelsFor(page));
+    if (_sameContents(strokesBefore, strokesAfter) &&
+        _sameContents(labelsBefore, labelsAfter)) {
+      return;
+    }
     // setState so the undo button picks up the new action.
     setState(() {});
     _pushAction(
       _Action(
         undo: () {
-          _strokesFor(page).addAll(strokes);
-          _textLabelsFor(page).addAll(labels);
+          _strokes[page] = List<_Stroke>.from(strokesBefore);
+          _textLabels[page] = List<_TextLabel>.from(labelsBefore);
         },
         redo: () {
-          _strokesFor(page).removeWhere(strokes.contains);
-          _textLabelsFor(page).removeWhere(labels.contains);
+          _strokes[page] = List<_Stroke>.from(strokesAfter);
+          _textLabels[page] = List<_TextLabel>.from(labelsAfter);
         },
       ),
     );
   }
 
+  static bool _sameContents(List<Object> a, List<Object> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (!identical(a[i], b[i])) return false;
+    }
+    return true;
+  }
+
   void _eraseAt(int page, Offset point) {
+    if (_drawingPage != page) return;
+    final radius = _eraserRadiusFor(page);
     final strokes = _strokesFor(page);
     final labels = _textLabelsFor(page);
-    final hitStrokes =
-        strokes.where((s) => _strokeNear(s, point, _eraserRadius)).toList();
-    final hitLabels =
-        labels.where((l) => _labelNear(l, point, _eraserRadius)).toList();
-    if (hitStrokes.isEmpty && hitLabels.isEmpty) return;
+
+    var changed = false;
+    final remaining = <_Stroke>[];
+    for (final stroke in strokes) {
+      if (!_strokeNear(stroke, point, radius)) {
+        remaining.add(stroke);
+        continue;
+      }
+      final pieces = _splitAroundEraser(stroke, point, radius);
+      final keptPoints = pieces.fold<int>(0, (n, s) => n + s.points.length);
+      if (pieces.length == 1 && keptPoints == stroke.points.length) {
+        // Near enough to test but nothing actually rubbed out.
+        remaining.add(stroke);
+        continue;
+      }
+      changed = true;
+      remaining.addAll(pieces);
+    }
+
+    // Text is erased whole: half a word is not a correction.
+    final keptLabels = labels
+        .where((l) => !_labelNear(l, point, radius))
+        .toList();
+    if (keptLabels.length != labels.length) changed = true;
+    if (!changed) return;
+
     setState(() {
-      for (final s in hitStrokes) {
-        strokes.remove(s);
-        _erasedStrokes.add(s);
-      }
-      for (final l in hitLabels) {
-        labels.remove(l);
-        _erasedLabels.add(l);
-      }
+      _strokes[page] = remaining;
+      _textLabels[page] = keptLabels;
     });
+  }
+
+  /// The parts of [stroke] the eraser did not touch, in order. Points inside the
+  /// eraser are dropped and each surviving run becomes a stroke of its own, so
+  /// rubbing the middle of a line leaves both ends where they were.
+  static List<_Stroke> _splitAroundEraser(
+    _Stroke stroke,
+    Offset point,
+    double radius,
+  ) {
+    final reach = radius + stroke.width / 2;
+    final pieces = <_Stroke>[];
+    var run = <Offset>[];
+
+    void flush() {
+      // A leftover single point would show up as a speck, so only keep runs
+      // that still draw as a line.
+      if (run.length > 1) pieces.add(stroke.copyWithPoints(run));
+      run = <Offset>[];
+    }
+
+    for (int i = 0; i < stroke.points.length; i++) {
+      final p = stroke.points[i];
+      if ((p - point).distance <= reach) {
+        flush();
+        continue;
+      }
+      run.add(p);
+      // A fast stroke samples sparsely, so the line can pass straight through
+      // the eraser without any of its points landing inside. Cut it there too,
+      // otherwise the gap gets bridged by the segment that spans it.
+      if (i + 1 < stroke.points.length &&
+          _distanceToSegment(point, p, stroke.points[i + 1]) <= reach) {
+        flush();
+      }
+    }
+    flush();
+    return pieces;
   }
 
   static bool _strokeNear(_Stroke s, Offset p, double radius) {
@@ -618,9 +1182,8 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     final ab = b - a;
     final lengthSquared = ab.dx * ab.dx + ab.dy * ab.dy;
     if (lengthSquared == 0) return (p - a).distance;
-    final t =
-        (((p.dx - a.dx) * ab.dx + (p.dy - a.dy) * ab.dy) / lengthSquared)
-            .clamp(0.0, 1.0);
+    final t = (((p.dx - a.dx) * ab.dx + (p.dy - a.dy) * ab.dy) / lengthSquared)
+        .clamp(0.0, 1.0);
     return (p - Offset(a.dx + ab.dx * t, a.dy + ab.dy * t)).distance;
   }
 
@@ -635,10 +1198,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     final painter = TextPainter(
       text: TextSpan(
         text: l.text,
-        style: TextStyle(
-          fontSize: l.fontSize,
-          fontWeight: FontWeight.bold,
-        ),
+        style: TextStyle(fontSize: l.fontSize, fontWeight: FontWeight.bold),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -650,36 +1210,12 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     );
   }
 
-  void _updateStroke(DragUpdateDetails d, int page) {
-    if (_active == null || _drawingPage != page) return;
-    // If the pointer wanders into the protected field, finalize the current
-    // stroke and stop drawing for the rest of this drag. Skipping the point
-    // alone isn't enough — the painter connects consecutive points with a
-    // straight line, so a stroke crossing the field would bridge right over it.
-    if (_isLocked(page, d.localPosition)) {
-      _commitActiveStroke(page);
-      return;
-    }
-    setState(() {
-      _active = _Stroke(
-        [..._active!.points, d.localPosition],
-        _active!.color,
-        _active!.width,
-      );
-    });
-  }
-
-  void _endStroke(DragEndDetails d, int page) => _commitActiveStroke(page);
-
-  // Commit the in-progress stroke (if any) to the page and record it for undo.
+  /// Moves the in-progress stroke (if any) onto the page and records it for
+  /// undo. This is the only point where drawing touches setState.
   void _commitActiveStroke(int page) {
-    final added = _active;
-    if (added == null) return;
-    setState(() {
-      _strokesFor(page).add(added);
-      _active = null;
-      _drawingPage = -1;
-    });
+    if (_active.stroke == null || _active.page != page) return;
+    final added = _active.take()!;
+    setState(() => _strokesFor(page).add(added));
     _pushAction(
       _Action(
         undo: () => _strokesFor(page).remove(added),
@@ -931,8 +1467,10 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
 
   /// Filename stem for exports and print jobs: patient first, then the form.
   String get _documentName {
-    final patient = (_patientCode ?? 'patient')
-        .replaceAll(RegExp(r'[^A-Za-z0-9]+'), '_');
+    final patient = (_patientCode ?? 'patient').replaceAll(
+      RegExp(r'[^A-Za-z0-9]+'),
+      '_',
+    );
     return '${patient}_${widget.title.replaceAll(' ', '_')}';
   }
 
@@ -1118,18 +1656,23 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                 tooltip: 'Reset zoom',
               ),
               const Spacer(),
-              if (_mode == _Mode.none)
-                const Padding(
-                  padding: EdgeInsets.only(right: 4),
+              Flexible(
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 4),
                   child: Text(
-                    'Pick a tool',
-                    style: TextStyle(
+                    _mode == _Mode.none
+                        ? 'Pick a tool'
+                        : 'Two fingers to scroll · pinch to zoom',
+                    textAlign: TextAlign.end,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
                       color: Colors.white54,
-                      fontSize: 12,
+                      fontSize: 11,
                       fontStyle: FontStyle.italic,
                     ),
                   ),
                 ),
+              ),
             ],
           ),
           // Row 2: contextual sub-toolbar based on selected mode
@@ -1197,17 +1740,39 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                       ),
                     ),
                   ),
-                  Expanded(
-                    child: Slider(
-                      value: _penWidth,
-                      min: 1,
-                      max: 12,
-                      activeColor: _color,
-                      inactiveColor: Colors.white24,
-                      onChanged: (v) => setState(() => _penWidth = v),
+                  // The one slider sizes whichever tool is in hand. The eraser
+                  // starts small so a single wrong tick can be lifted out of a
+                  // line, and zooming in makes it finer still.
+                  if (_erasing)
+                    Expanded(
+                      child: Slider(
+                        value: _eraserWidth,
+                        min: 4,
+                        max: 32,
+                        activeColor: Colors.white,
+                        inactiveColor: Colors.white24,
+                        onChanged: (v) => setState(() => _eraserWidth = v),
+                      ),
+                    )
+                  else
+                    Expanded(
+                      child: Slider(
+                        value: _penWidth,
+                        min: 1,
+                        max: 12,
+                        activeColor: _color,
+                        inactiveColor: Colors.white24,
+                        onChanged: (v) => setState(() => _penWidth = v),
+                      ),
                     ),
-                  ),
-                  Icon(Icons.circle, color: _color, size: _penWidth * 2 + 4),
+                  if (_erasing)
+                    Icon(
+                      Icons.circle_outlined,
+                      color: Colors.white,
+                      size: (_eraserWidth * 1.2 + 6).clamp(10.0, 34.0),
+                    )
+                  else
+                    Icon(Icons.circle, color: _color, size: _penWidth * 2 + 4),
                 ],
                 const SizedBox(width: 6),
               ],
@@ -1245,17 +1810,27 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     return Row(
       children: [
         Expanded(
-          child: SingleChildScrollView(
-            controller: _scrollController,
-            physics: _mode == _Mode.pan
-                ? const ClampingScrollPhysics()
-                : const NeverScrollableScrollPhysics(),
-            child: Column(
-              children: [
-                for (int page = 1; page <= _pageImages.length; page++)
-                  _buildPage(page),
-                const SizedBox(height: 16),
-              ],
+          // Two fingers anywhere on the chart scroll it, so the pages can be
+          // moved through over the charting itself instead of only by the
+          // handle down the side. A single finger stays the pen, which is why
+          // the list itself never takes drags.
+          child: Listener(
+            onPointerDown: _onViewportPointerDown,
+            onPointerMove: _onViewportPointerMove,
+            onPointerUp: _onViewportPointerFinished,
+            onPointerCancel: _onViewportPointerFinished,
+            child: SingleChildScrollView(
+              controller: _scrollController,
+              physics: _mode == _Mode.pan
+                  ? const ClampingScrollPhysics()
+                  : const NeverScrollableScrollPhysics(),
+              child: Column(
+                children: [
+                  for (int page = 1; page <= _pageImages.length; page++)
+                    _buildPage(page),
+                  const SizedBox(height: 16),
+                ],
+              ),
             ),
           ),
         ),
@@ -1290,9 +1865,9 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                 maxScale: 5.0,
                 child: LayoutBuilder(
                   builder: (context, constraints) {
-                    _pageSizes[page] = Size(
-                      constraints.maxWidth,
-                      constraints.maxHeight,
+                    _recordPageSize(
+                      page,
+                      Size(constraints.maxWidth, constraints.maxHeight),
                     );
                     return Stack(
                       children: [
@@ -1302,9 +1877,30 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                             fit: StackFit.expand,
                             children: [
                               Image.memory(imageBytes, fit: BoxFit.fill),
-                              // Draw / tap overlay (below labels so labels stay interactive)
+                              // Card/control number, stamped into the form's
+                              // own field. It is issued by the app rather than
+                              // typed, which is why the field stays locked —
+                              // and why this is painted inside the
+                              // RepaintBoundary, so the number is part of
+                              // anything exported or printed.
+                              Positioned.fill(
+                                child: IgnorePointer(
+                                  child: CustomPaint(
+                                    painter: _ControlNumberPainter(
+                                      code: _patientCode ?? '',
+                                      regions: lockedRegionsForPage(
+                                        widget.editablePdfPath,
+                                        page,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              // Draw / tap overlay (below labels so labels stay
+                              // interactive in text mode)
                               Positioned.fill(
                                 child: Listener(
+                                  behavior: HitTestBehavior.opaque,
                                   onPointerSignal: (event) {
                                     if (event is PointerScrollEvent &&
                                         HardwareKeyboard
@@ -1320,44 +1916,25 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                                       );
                                     }
                                   },
-                                  child: GestureDetector(
-                                    behavior: HitTestBehavior.opaque,
-                                    onPanStart: _mode != _Mode.draw
-                                        ? null
-                                        : _erasing
-                                            ? (d) => _startErase(d, page)
-                                            : (d) => _startStroke(d, page),
-                                    onPanUpdate: _mode != _Mode.draw
-                                        ? null
-                                        : _erasing
-                                            ? (d) => _updateErase(d, page)
-                                            : (d) => _updateStroke(d, page),
-                                    onPanEnd: _mode != _Mode.draw
-                                        ? null
-                                        : _erasing
-                                            ? (_) => _endErase(page)
-                                            : (d) => _endStroke(d, page),
-                                    onTapUp: _mode == _Mode.text
-                                        ? (d) {
-                                            if (_isLocked(
-                                              page,
-                                              d.localPosition,
-                                            )) {
-                                              _notifyLocked();
-                                              return;
-                                            }
-                                            _addTextLabel(
-                                              page,
-                                              d.localPosition,
-                                            );
-                                          }
-                                        : null,
-                                    child: CustomPaint(
-                                      painter: _DrawingPainter(
-                                        strokes: _strokesFor(page),
-                                        active: _drawingPage == page
-                                            ? _active
-                                            : null,
+                                  onPointerDown: (e) =>
+                                      _onDrawPointerDown(e, page),
+                                  onPointerMove: (e) =>
+                                      _onDrawPointerMove(e, page),
+                                  onPointerUp: (e) => _onDrawPointerUp(e, page),
+                                  onPointerCancel: (e) =>
+                                      _onDrawPointerCancel(e, page),
+                                  child: CustomPaint(
+                                    painter: _DrawingPainter(_strokesFor(page)),
+                                    // The stroke under the pointer gets its own
+                                    // layer: it repaints on every pointer move,
+                                    // and the committed ink underneath does not
+                                    // have to be redrawn with it.
+                                    child: RepaintBoundary(
+                                      child: CustomPaint(
+                                        painter: _ActiveStrokePainter(
+                                          active: _active,
+                                          page: page,
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -1369,56 +1946,78 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                                   key: ObjectKey(label),
                                   left: label.position.dx,
                                   top: label.position.dy,
-                                  child: GestureDetector(
-                                    behavior: HitTestBehavior.opaque,
-                                    onTap: () => _editTextLabel(page, label),
-                                    onLongPress: () {
-                                      final list = _textLabelsFor(page);
-                                      final idx = list.indexOf(label);
-                                      if (idx == -1) return;
-                                      setState(() => list.removeAt(idx));
-                                      _pushAction(
-                                        _Action(
-                                          undo: () => _textLabelsFor(
+                                  child: IgnorePointer(
+                                    // Only the text tool picks labels up. In
+                                    // draw mode a label used to swallow the
+                                    // pointer, which is why parts of the chart
+                                    // could not be written on once something
+                                    // had been typed there.
+                                    ignoring: _mode != _Mode.text,
+                                    child: GestureDetector(
+                                      behavior: HitTestBehavior.opaque,
+                                      onTap: () => _editTextLabel(page, label),
+                                      onLongPress: () {
+                                        final list = _textLabelsFor(page);
+                                        final idx = list.indexOf(label);
+                                        if (idx == -1) return;
+                                        setState(() => list.removeAt(idx));
+                                        _pushAction(
+                                          _Action(
+                                            undo: () => _textLabelsFor(
+                                              page,
+                                            ).insert(idx, label),
+                                            redo: () => _textLabelsFor(
+                                              page,
+                                            ).remove(label),
+                                          ),
+                                        );
+                                      },
+                                      onPanUpdate: (d) {
+                                        // d.delta is in screen pixels while the
+                                        // label is positioned in page pixels, so
+                                        // at any zoom other than 1x an uncorrected
+                                        // delta makes the text outrun the finger.
+                                        final scale = _scaleFor(page);
+                                        final next =
+                                            label.position +
+                                            (scale == 0
+                                                ? d.delta
+                                                : d.delta / scale);
+                                        // Don't let a label be dragged into the
+                                        // protected patient field, or off the page.
+                                        if (_isLocked(page, next)) return;
+                                        setState(
+                                          () => label.position = _clampToPage(
                                             page,
-                                          ).insert(idx, label),
-                                          redo: () => _textLabelsFor(
-                                            page,
-                                          ).remove(label),
-                                        ),
-                                      );
-                                    },
-                                    onPanUpdate: (d) {
-                                      // d.delta is in screen pixels while the
-                                      // label is positioned in page pixels, so
-                                      // at any zoom other than 1x an uncorrected
-                                      // delta makes the text outrun the finger.
-                                      final scale = _scaleFor(page);
-                                      final next = label.position +
-                                          (scale == 0 ? d.delta : d.delta / scale);
-                                      // Don't let a label be dragged into the
-                                      // protected patient field, or off the page.
-                                      if (_isLocked(page, next)) return;
-                                      setState(
-                                        () => label.position =
-                                            _clampToPage(page, next),
-                                      );
-                                    },
-                                    child: FractionalTranslation(
-                                      translation: const Offset(0.0, -0.5),
-                                      child: Text(
-                                        label.text,
-                                        style: TextStyle(
-                                          color: label.color,
-                                          fontSize: label.fontSize,
-                                          fontWeight: FontWeight.bold,
-                                          shadows: const [
-                                            Shadow(
-                                              blurRadius: 2,
-                                              color: Colors.white,
-                                              offset: Offset(0.5, 0.5),
-                                            ),
-                                          ],
+                                            next,
+                                          ),
+                                        );
+                                      },
+                                      onPanEnd: (_) => setState(() {
+                                        // Seat it back on a rule after the move,
+                                        // the same way it was placed.
+                                        label.position = _snapToLine(
+                                          page,
+                                          label.position,
+                                          label.fontSize,
+                                        );
+                                      }),
+                                      child: FractionalTranslation(
+                                        translation: const Offset(0.0, -0.5),
+                                        child: Text(
+                                          label.text,
+                                          style: TextStyle(
+                                            color: label.color,
+                                            fontSize: label.fontSize,
+                                            fontWeight: FontWeight.bold,
+                                            shadows: const [
+                                              Shadow(
+                                                blurRadius: 2,
+                                                color: Colors.white,
+                                                offset: Offset(0.5, 0.5),
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -1437,6 +2036,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                                   widget.editablePdfPath,
                                   page,
                                 ),
+                                showGlyph: (_patientCode ?? '').isEmpty,
                               ),
                             ),
                           ),
@@ -1789,33 +2389,135 @@ class _ScrollHandle extends StatelessWidget {
 
 // ── Painter ───────────────────────────────────────────────────────────────────
 
+/// The ink already committed to a page.
 class _DrawingPainter extends CustomPainter {
   final List<_Stroke> strokes;
-  final _Stroke? active;
 
-  const _DrawingPainter({required this.strokes, this.active});
+  const _DrawingPainter(this.strokes);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final all = [...strokes, if (active != null) active!];
-    for (final s in all) {
-      if (s.points.length < 2) continue;
-      final paint = Paint()
-        ..color = s.color
-        ..strokeWidth = s.width
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..style = PaintingStyle.stroke;
-      final path = Path()..moveTo(s.points.first.dx, s.points.first.dy);
-      for (int i = 1; i < s.points.length; i++) {
-        path.lineTo(s.points[i].dx, s.points[i].dy);
-      }
-      canvas.drawPath(path, paint);
+    for (final stroke in strokes) {
+      paintStroke(canvas, stroke);
     }
+  }
+
+  /// Draws one stroke. Points are joined through their midpoints with quadratic
+  /// curves rather than straight lines, so handwriting comes out smooth instead
+  /// of showing every sample as a corner. A stroke holding a single point is a
+  /// deliberate dot — a tick or a decimal point — and is drawn as one; the old
+  /// painter skipped those entirely.
+  static void paintStroke(Canvas canvas, _Stroke stroke) {
+    final points = stroke.points;
+    if (points.isEmpty) return;
+    if (points.length == 1) {
+      canvas.drawCircle(
+        points.first,
+        stroke.width / 2,
+        Paint()
+          ..color = stroke.color
+          ..style = PaintingStyle.fill,
+      );
+      return;
+    }
+    final paint = Paint()
+      ..color = stroke.color
+      ..strokeWidth = stroke.width
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+    final path = Path()..moveTo(points.first.dx, points.first.dy);
+    for (int i = 1; i < points.length - 1; i++) {
+      final mid = Offset(
+        (points[i].dx + points[i + 1].dx) / 2,
+        (points[i].dy + points[i + 1].dy) / 2,
+      );
+      path.quadraticBezierTo(points[i].dx, points[i].dy, mid.dx, mid.dy);
+    }
+    path.lineTo(points.last.dx, points.last.dy);
+    canvas.drawPath(path, paint);
   }
 
   @override
   bool shouldRepaint(_DrawingPainter old) => true;
+}
+
+/// Paints only the stroke under the pointer, repainting straight off
+/// [_ActiveStroke] instead of a widget rebuild so the ink keeps pace with the
+/// pen.
+class _ActiveStrokePainter extends CustomPainter {
+  final _ActiveStroke active;
+  final int page;
+
+  _ActiveStrokePainter({required this.active, required this.page})
+    : super(repaint: active);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stroke = active.stroke;
+    if (stroke == null || active.page != page) return;
+    _DrawingPainter.paintStroke(canvas, stroke);
+  }
+
+  @override
+  bool shouldRepaint(_ActiveStrokePainter old) =>
+      old.active != active || old.page != page;
+}
+
+/// Stamps the app-issued card/control number into the form's own field.
+///
+/// The field is a locked region that nothing else may write in, and this is what
+/// fills it. Unlike the lock tint it is painted inside the page's
+/// RepaintBoundary, so the number is part of every exported and printed copy.
+class _ControlNumberPainter extends CustomPainter {
+  final String code;
+  final List<Rect> regions;
+
+  const _ControlNumberPainter({required this.code, required this.regions});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (code.isEmpty || regions.isEmpty) return;
+    for (final normalized in regions) {
+      final rect = Rect.fromLTRB(
+        normalized.left * size.width,
+        normalized.top * size.height,
+        normalized.right * size.width,
+        normalized.bottom * size.height,
+      );
+      if (rect.width < 24 || rect.height < 8) continue;
+
+      // Start from the height of the field and step down until the number fits
+      // along it: the same rect has to hold codes of different lengths on forms
+      // whose fields are different sizes.
+      var fontSize = rect.height * 0.7;
+      late TextPainter painter;
+      while (true) {
+        painter = TextPainter(
+          text: TextSpan(
+            text: code,
+            style: TextStyle(
+              color: const Color(0xFF15151F),
+              fontSize: fontSize,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.4,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        if (painter.width <= rect.width - 8 || fontSize <= 6) break;
+        fontSize -= 0.5;
+      }
+      painter.paint(
+        canvas,
+        Offset(rect.left + 4, rect.center.dy - painter.height / 2),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ControlNumberPainter old) =>
+      old.code != code || !listEquals(old.regions, regions);
 }
 
 // ── Locked-region overlay ─────────────────────────────────────────────────────
@@ -1825,7 +2527,12 @@ class _DrawingPainter extends CustomPainter {
 
 class _LockOverlayPainter extends CustomPainter {
   final List<Rect> normalizedRects;
-  const _LockOverlayPainter(this.normalizedRects);
+
+  /// Suppressed once the control number has been stamped into the field: the
+  /// glyph sits exactly where the number is drawn.
+  final bool showGlyph;
+
+  const _LockOverlayPainter(this.normalizedRects, {this.showGlyph = true});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1846,6 +2553,7 @@ class _LockOverlayPainter extends CustomPainter {
       canvas.drawRRect(rrect, fill);
       canvas.drawRRect(rrect, border);
 
+      if (!showGlyph) continue;
       // Tiny lock glyph in the top-left corner of the region.
       final tp = TextPainter(
         text: const TextSpan(text: '\u{1F512}', style: TextStyle(fontSize: 11)),
