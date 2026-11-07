@@ -12,6 +12,46 @@ import 'package:flutter/widgets.dart' show Rect;
 /// To add or tweak a region, change the rect for the matching asset path. The
 /// path must exactly match the `editablePdfPath` passed to the annotator.
 const Map<String, Rect> _kFirstPageLocks = {
+  // 2026 charting set (assets/NEW CHARTING 2026) — patient (PX) forms.
+  r'assets/NEW CHARTING 2026/ENDODONTICS/ENDODONTICS PX CHART/Endodontic-form.pdf':
+      Rect.fromLTRB(0.1117, 0.1652, 0.7243, 0.1891),
+  r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-III-LIVE-PX.pdf':
+      Rect.fromLTRB(0.0528, 0.1832, 0.7001, 0.2080),
+  r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-II-LIVE-PX.pdf':
+      Rect.fromLTRB(0.0528, 0.1832, 0.7001, 0.2080),
+  r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-I-LIVE-PX.pdf':
+      Rect.fromLTRB(0.0528, 0.1832, 0.7001, 0.2080),
+  r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-IV-LIVE-PX.pdf':
+      Rect.fromLTRB(0.0528, 0.1832, 0.7001, 0.2080),
+  r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-V-LIVE-PX.pdf':
+      Rect.fromLTRB(0.0528, 0.1832, 0.7001, 0.2080),
+  r'assets/NEW CHARTING 2026/ORAL SURGERY/Exodontia-patient-form.pdf':
+      Rect.fromLTRB(0.1117, 0.1885, 0.6638, 0.2124),
+  r'assets/NEW CHARTING 2026/PEDIATRIC/ART PEDIA.pdf':
+      Rect.fromLTRB(0.0544, 0.2277, 0.6584, 0.2540),
+  r'assets/NEW CHARTING 2026/PEDIATRIC/FLUORIDE APPLICATION PEDIA.pdf':
+      Rect.fromLTRB(0.1705, 0.1913, 0.7220, 0.2161),
+  r'assets/NEW CHARTING 2026/PEDIATRIC/PFS PEDIA.pdf':
+      Rect.fromLTRB(0.0544, 0.2288, 0.6584, 0.2550),
+  r'assets/NEW CHARTING 2026/PEDIATRIC/PRR PEDIA.pdf':
+      Rect.fromLTRB(0.0528, 0.2042, 0.6411, 0.2291),
+  r'assets/NEW CHARTING 2026/PEDIATRIC/PULP THERAPHY PEDIA.pdf':
+      Rect.fromLTRB(0.1116, 0.2253, 0.7236, 0.2524),
+  r'assets/NEW CHARTING 2026/PEDIATRIC/SPACE MAINTAINER PEDIA.pdf':
+      Rect.fromLTRB(0.1705, 0.1827, 0.7824, 0.2075),
+  r'assets/NEW CHARTING 2026/PERIODONTICS/Oral-Prophylaxis-form-PX.pdf':
+      Rect.fromLTRB(0.1706, 0.1759, 0.7226, 0.2008),
+  r'assets/NEW CHARTING 2026/PERIODONTICS/PERIO CHART.pdf':
+      Rect.fromLTRB(0.1705, 0.1566, 0.7220, 0.1814),
+  r'assets/NEW CHARTING 2026/PROSTHODONTICS/COMPLETE DENTURE/CD PX CHART/CD-patient-form.pdf':
+      Rect.fromLTRB(0.1117, 0.1667, 0.6638, 0.1906),
+  r'assets/NEW CHARTING 2026/PROSTHODONTICS/FIXED PARTIAL DENTURE/FPD PX CHART/Fixed-restoration-patient-1.pdf':
+      Rect.fromLTRB(0.1117, 0.2307, 0.6658, 0.2536),
+  r'assets/NEW CHARTING 2026/PROSTHODONTICS/REMOVABLE PARTIAL DENTURE/RPD PX CHART/RPD-patient-form.pdf':
+      Rect.fromLTRB(0.1117, 0.1664, 0.6569, 0.1893),
+
+  // Legacy forms (assets/pdf) — kept so records saved before the 2026 set
+  // still open with their lock.
   r'assets/pdf/CD CHART/PATIENT CHART.pdf': Rect.fromLTRB(
     0.1667,
     0.131,

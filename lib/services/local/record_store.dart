@@ -100,6 +100,16 @@ class RecordStore {
   /// pass a category explicitly and when importing legacy drafts.
   static String categoryForTemplate(String templatePath) {
     const byFolder = {
+      // 2026 charting set.
+      'COMPLETE DENTURE/': 'Complete Dentures',
+      'FIXED PARTIAL DENTURE/': 'Fixed Partial Denture',
+      'REMOVABLE PARTIAL DENTURE/': 'Removable Partial Denture',
+      'NEW CHARTING 2026/PEDIATRIC/': 'Pediatric',
+      'NEW CHARTING 2026/ENDODONTICS/': 'Endodontics',
+      'NEW CHARTING 2026/ORAL SURGERY/': 'Exodontia',
+      'NEW CHARTING 2026/OPERATIVE DENTISTRY/': 'Restorative',
+      'NEW CHARTING 2026/PERIODONTICS/': 'Periodontics',
+      // Legacy forms.
       'PEDIA CHART': 'Pediatric',
       'CD CHART': 'Complete Dentures',
       'ENDO CHART': 'Endodontics',
