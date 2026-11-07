@@ -1892,6 +1892,10 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                                         widget.editablePdfPath,
                                         page,
                                       ),
+                                      field: controlNumberFieldForPage(
+                                        widget.editablePdfPath,
+                                        page,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -2473,7 +2477,15 @@ class _ControlNumberPainter extends CustomPainter {
   final String code;
   final List<Rect> regions;
 
-  const _ControlNumberPainter({required this.code, required this.regions});
+  /// The form's blank underline for the number (normalised); when set, the
+  /// number is written on it instead of inside the locked rect.
+  final Rect? field;
+
+  const _ControlNumberPainter({
+    required this.code,
+    required this.regions,
+    this.field,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -2490,7 +2502,9 @@ class _ControlNumberPainter extends CustomPainter {
       // Start from the height of the field and step down until the number fits
       // along it: the same rect has to hold codes of different lengths on forms
       // whose fields are different sizes.
-      var fontSize = rect.height * 0.7;
+      // On a measured underline, match the form's own text size (the locked
+      // rect is the label line plus padding, so half its height ≈ the label).
+      var fontSize = rect.height * (field != null ? 0.5 : 0.7);
       late TextPainter painter;
       while (true) {
         painter = TextPainter(
@@ -2508,6 +2522,33 @@ class _ControlNumberPainter extends CustomPainter {
         if (painter.width <= rect.width - 8 || fontSize <= 6) break;
         fontSize -= 0.5;
       }
+      final f = field;
+      if (f != null) {
+        // Sit the text's baseline just above the underline, starting a little
+        // after the label's colon, and shrink further if the line is short.
+        final left = f.left * size.width;
+        final right = f.right * size.width;
+        final lineY = f.bottom * size.height;
+        while (painter.width > right - left - 6 && fontSize > 6) {
+          fontSize -= 0.5;
+          painter = TextPainter(
+            text: TextSpan(
+              text: code,
+              style: (painter.text! as TextSpan).style!.copyWith(
+                fontSize: fontSize,
+              ),
+            ),
+            textDirection: TextDirection.ltr,
+          )..layout();
+        }
+        final baseline =
+            painter.computeDistanceToActualBaseline(TextBaseline.alphabetic);
+        painter.paint(
+          canvas,
+          Offset(left + 4, lineY - baseline - fontSize * 0.12),
+        );
+        continue;
+      }
       painter.paint(
         canvas,
         Offset(rect.left + 4, rect.center.dy - painter.height / 2),
@@ -2517,7 +2558,9 @@ class _ControlNumberPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_ControlNumberPainter old) =>
-      old.code != code || !listEquals(old.regions, regions);
+      old.code != code ||
+      old.field != field ||
+      !listEquals(old.regions, regions);
 }
 
 // ── Locked-region overlay ─────────────────────────────────────────────────────

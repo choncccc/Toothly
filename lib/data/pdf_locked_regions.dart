@@ -175,3 +175,102 @@ List<Rect> lockedRegionsForPage(String assetPath, int page) {
   final r = _kFirstPageLocks[assetPath];
   return r == null ? const [] : [r];
 }
+
+/// Where the issued card/control number is written on a form's first page: the
+/// blank underline after the "Patient's Card/Control Number:" label. `left` and
+/// `right` are the ends of the underline and `bottom` is its height on the page,
+/// so the number sits on the line rather than over the label. `top` is
+/// nominal. Measured from each PDF's drawn underline.
+///
+/// Forms missing here fall back to writing inside the locked rect.
+const Map<String, Rect> _kControlNumberFields = {
+  r'assets/NEW CHARTING 2026/ENDODONTICS/ENDODONTICS PX CHART/Endodontic-form.pdf':
+      Rect.fromLTRB(0.4164, 0.1613, 0.7258, 0.1813),
+  r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-III-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-II-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-I-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-IV-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-V-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/NEW CHARTING 2026/ORAL SURGERY/Exodontia-patient-form.pdf':
+      Rect.fromLTRB(0.4164, 0.1847, 0.6474, 0.2047),
+  r'assets/NEW CHARTING 2026/PEDIATRIC/ART PEDIA.pdf':
+      Rect.fromLTRB(0.3641, 0.2264, 0.6040, 0.2464),
+  r'assets/NEW CHARTING 2026/PEDIATRIC/FLUORIDE APPLICATION PEDIA.pdf':
+      Rect.fromLTRB(0.4722, 0.1878, 0.7059, 0.2078),
+  r'assets/NEW CHARTING 2026/PEDIATRIC/PFS PEDIA.pdf':
+      Rect.fromLTRB(0.3641, 0.2276, 0.6040, 0.2476),
+  r'assets/NEW CHARTING 2026/PEDIATRIC/PRR PEDIA.pdf':
+      Rect.fromLTRB(0.3546, 0.2017, 0.5882, 0.2217),
+  r'assets/NEW CHARTING 2026/PEDIATRIC/PULP THERAPHY PEDIA.pdf':
+      Rect.fromLTRB(0.4134, 0.2243, 0.7255, 0.2443),
+  r'assets/NEW CHARTING 2026/PEDIATRIC/SPACE MAINTAINER PEDIA.pdf':
+      Rect.fromLTRB(0.4722, 0.1793, 0.7843, 0.1993),
+  r'assets/NEW CHARTING 2026/PERIODONTICS/Oral-Prophylaxis-form-PX.pdf':
+      Rect.fromLTRB(0.4753, 0.1729, 0.7062, 0.1929),
+  r'assets/NEW CHARTING 2026/PERIODONTICS/PERIO CHART.pdf':
+      Rect.fromLTRB(0.4722, 0.1536, 0.7059, 0.1736),
+  r'assets/NEW CHARTING 2026/PROSTHODONTICS/COMPLETE DENTURE/CD PX CHART/CD-patient-form.pdf':
+      Rect.fromLTRB(0.4164, 0.1628, 0.6474, 0.1828),
+  r'assets/NEW CHARTING 2026/PROSTHODONTICS/FIXED PARTIAL DENTURE/FPD PX CHART/Fixed-restoration-patient-1.pdf':
+      Rect.fromLTRB(0.3915, 0.2261, 0.6514, 0.2461),
+  r'assets/NEW CHARTING 2026/PROSTHODONTICS/REMOVABLE PARTIAL DENTURE/RPD PX CHART/RPD-patient-form.pdf':
+      Rect.fromLTRB(0.3915, 0.1618, 0.6425, 0.1818),
+  r'assets/pdf/CD CHART/CD PATIENT SCORE SHEET.pdf':
+      Rect.fromLTRB(0.4164, 0.1628, 0.6474, 0.1828),
+  r'assets/pdf/ENDO CHART/ENDO (LIVE PX)/Endodontic-form.pdf':
+      Rect.fromLTRB(0.4164, 0.1613, 0.7258, 0.1813),
+  r'assets/pdf/ENDO CHART/ENDO (LIVE PX)/ENDODONTIC-CASE-RECALL.pdf':
+      Rect.fromLTRB(0.4174, 0.2458, 0.6319, 0.2658),
+  r'assets/pdf/EXO CHART/EXO (LIVE PX)/Exodontia-patient-form.pdf':
+      Rect.fromLTRB(0.4164, 0.1847, 0.6474, 0.2047),
+  r'assets/pdf/FPD CHART/FPD PATIENT SCORE SHEET.pdf':
+      Rect.fromLTRB(0.3915, 0.2261, 0.6514, 0.2461),
+  r'assets/pdf/RPD CHART/RPD PATIENT SCORE SHEET.pdf':
+      Rect.fromLTRB(0.3915, 0.1618, 0.6425, 0.1818),
+  r'assets/pdf/RESTO CHART/RESTO (LIVE PX)/CLASS-I-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/pdf/RESTO CHART/RESTO (LIVE PX)/CLASS-II-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/pdf/RESTO CHART/RESTO (LIVE PX)/CLASS-III-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/pdf/RESTO CHART/RESTO (LIVE PX)/CLASS-IV-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/pdf/RESTO CHART/RESTO (LIVE PX)/CLASS-V-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/pdf/RESTO CHART/RESTO (CHECK LIST)/Copy of CLASS-I-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/pdf/RESTO CHART/RESTO (CHECK LIST)/Copy of CLASS-II-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/pdf/RESTO CHART/RESTO (CHECK LIST)/Copy of CLASS-III-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/pdf/RESTO CHART/RESTO (CHECK LIST)/Copy of CLASS-IV-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/pdf/RESTO CHART/RESTO (CHECK LIST)/Copy of CLASS-V-LIVE-PX.pdf':
+      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+  r'assets/pdf/PEDIA CHART/PEDIA (CHECK LIST)/Copy of ART-Pedia.pdf':
+      Rect.fromLTRB(0.3670, 0.2150, 0.6048, 0.2350),
+  r'assets/pdf/PEDIA CHART/PEDIA (CHECK LIST)/PFS-Pedia (1).pdf':
+      Rect.fromLTRB(0.3670, 0.2155, 0.6048, 0.2355),
+  r'assets/pdf/PEDIA CHART/PEDIA (CHECK LIST)/PRR-Pediaa.pdf':
+      Rect.fromLTRB(0.3570, 0.1921, 0.5885, 0.2121),
+  r'assets/pdf/PEDIA CHART/PEDIA (LIVE PX)/Pediatric-appliance-SPACE-MAINTAINER.pdf':
+      Rect.fromLTRB(0.4747, 0.1577, 0.7846, 0.1777),
+  r'assets/pdf/PERIO CHART/PERIO-CHART.pdf':
+      Rect.fromLTRB(0.4750, 0.1499, 0.7061, 0.1699),
+  r'assets/pdf/PERIO CHART/PERIO (CHECK LIST)/Oral-Prophylaxis-form-PX(1).pdf':
+      Rect.fromLTRB(0.4753, 0.1729, 0.7062, 0.1929),
+  r'assets/pdf/PERIO CHART/PERIO (CHECK LIST)/FLUORIDE-APPLICATION(1).pdf':
+      Rect.fromLTRB(0.4747, 0.1657, 0.7062, 0.1857),
+};
+
+/// Normalised underline field for the control number on [assetPath]'s [page],
+/// or null when the form has none recorded.
+Rect? controlNumberFieldForPage(String assetPath, int page) {
+  if (page != 1) return null;
+  return _kControlNumberFields[assetPath];
+}
