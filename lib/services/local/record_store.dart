@@ -250,6 +250,22 @@ class RecordStore {
     return '$stem${(highest + 1).toString().padLeft(3, '0')}';
   }
 
+  /// Whether another record in [category] already uses [code]. [exceptId] is
+  /// the record being edited, which may of course keep its own code.
+  Future<bool> codeInUse(String category, String code, {int? exceptId}) async {
+    final db = await _database;
+    final rows = await db.query(
+      'records',
+      columns: ['id'],
+      where: exceptId == null
+          ? 'category = ? AND patient_code = ?'
+          : 'category = ? AND patient_code = ? AND id != ?',
+      whereArgs: [category, code, if (exceptId != null) exceptId],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
   Future<PatientRecord?> byId(int id) async {
     final db = await _database;
     final rows = await db.query('records', where: 'id = ?', whereArgs: [id]);

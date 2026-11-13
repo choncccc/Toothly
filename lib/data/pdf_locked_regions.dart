@@ -112,3 +112,14 @@ Rect? controlNumberFieldForPage(String assetPath, int page) {
   if (page != 1) return null;
   return _kControlNumberFields[assetPath];
 }
+
+/// Forms whose control number is typed in by the user (digits only) instead of
+/// being issued by the app. The field stays locked against ink and text, but
+/// tapping it opens a number prompt.
+const Set<String> _kManualControlNumberForms = {
+  r'assets/NEW CHARTING 2026/ORAL SURGERY/Exodontia-patient-form.pdf',
+};
+
+/// Whether [assetPath]'s control number is entered by hand.
+bool controlNumberIsManual(String assetPath) =>
+    _kManualControlNumberForms.contains(assetPath);

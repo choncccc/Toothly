@@ -241,8 +241,48 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       _recordId = existing.id;
       _patientCode = existing.patientCode;
     }
-    if (_patientCode == null) unawaited(_assignPatientCode());
+    if (_patientCode == null && !_manualCode) unawaited(_assignPatientCode());
     _loadDocument();
+  }
+
+  /// True for forms (Exodontia) whose control number the user types in.
+  bool get _manualCode => controlNumberIsManual(widget.editablePdfPath);
+
+  /// Asks for the hand-entered control number (digits only) and rejects one
+  /// already used by another record in this department. Returns false when the
+  /// user cancels.
+  Future<bool> _promptControlNumber() async {
+    var initial = _patientCode ?? '';
+    while (mounted) {
+      final entered = await showDialog<String>(
+        context: context,
+        builder: (ctx) => _ControlNumberDialog(initialValue: initial),
+      );
+      if (entered == null || !mounted) return false;
+      final taken = await RecordStore.instance.codeInUse(
+        _category,
+        entered,
+        exceptId: _recordId,
+      );
+      if (!mounted) return false;
+      if (taken) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(
+                'Control number $entered is already used by another '
+                '$_category record.',
+              ),
+            ),
+          );
+        initial = entered;
+        continue;
+      }
+      setState(() => _patientCode = entered);
+      return true;
+    }
+    return false;
   }
 
   /// Issues the card/control number as the chart opens rather than at save
@@ -670,10 +710,16 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
   }
 
   /// Writes the current annotations to the patient's record. The card/control
-  /// number is issued by the app on first save — never typed — which is why the
-  /// matching field on the chart is a locked region.
+  /// number is issued by the app on first save — or, on manual-entry forms,
+  /// asked for if the user has not typed one yet.
   Future<bool> _persistRecord() async {
-    _patientCode ??= await RecordStore.instance.nextPatientCode(_category);
+    if (_manualCode) {
+      if ((_patientCode ?? '').isEmpty && !await _promptControlNumber()) {
+        return false;
+      }
+    } else {
+      _patientCode ??= await RecordStore.instance.nextPatientCode(_category);
+    }
     final id = await RecordStore.instance.save(
       id: _recordId,
       patientCode: _patientCode,
@@ -953,6 +999,11 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     if (e.pointer != _drawPointer) return;
     final downAt = _pointerDownAt;
     _clearDrawPointer();
+    final tapped =
+        downAt != null && (e.localPosition - downAt).distance <= _kTapSlop;
+    // On manual-entry forms, a tap on the control-number field asks for it.
+    final tappedCodeField =
+        tapped && _manualCode && _isLocked(page, e.localPosition);
     switch (_mode) {
       case _Mode.draw:
         if (_erasing) {
@@ -962,9 +1013,8 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
         }
       case _Mode.text:
         // Only a tap places text; a drag was meant for something else.
-        if (downAt == null || (e.localPosition - downAt).distance > _kTapSlop) {
-          return;
-        }
+        if (!tapped) return;
+        if (tappedCodeField) break;
         if (_isLocked(page, e.localPosition)) {
           _notifyLocked();
         } else {
@@ -974,6 +1024,7 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
       case _Mode.none:
         break;
     }
+    if (tappedCodeField) unawaited(_promptControlNumber());
   }
 
   void _onDrawPointerCancel(PointerCancelEvent e, int page) {
@@ -1005,7 +1056,8 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
   void _startStroke(int page, Offset position) {
     // Block drawing that begins inside the protected patient field.
     if (_isLocked(page, position)) {
-      _notifyLocked();
+      // A manual-entry field opens its prompt on pointer-up instead.
+      if (!_manualCode) _notifyLocked();
       return;
     }
     _active.begin(page, _Stroke([position], _color, _penWidth));
@@ -2041,6 +2093,9 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
                                   page,
                                 ),
                                 showGlyph: (_patientCode ?? '').isEmpty,
+                                hint: _manualCode && page == 1
+                                    ? 'Tap to enter control no.'
+                                    : null,
                               ),
                             ),
                           ),
@@ -2256,6 +2311,94 @@ class _TextInputDialogState extends State<_TextInputDialog> {
           ),
           onPressed: _submit,
           child: Text(editing ? 'Save' : 'Add'),
+        ),
+      ],
+    );
+  }
+}
+
+/// Prompt for a hand-entered control number. Digits only; pops the number, or
+/// null on cancel.
+class _ControlNumberDialog extends StatefulWidget {
+  final String initialValue;
+
+  const _ControlNumberDialog({required this.initialValue});
+
+  @override
+  State<_ControlNumberDialog> createState() => _ControlNumberDialogState();
+}
+
+class _ControlNumberDialogState extends State<_ControlNumberDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialValue);
+    _controller.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final value = _controller.text.trim();
+    if (value.isEmpty) return;
+    Navigator.pop(context, value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canSubmit = _controller.text.trim().isNotEmpty;
+    return AlertDialog(
+      backgroundColor: const Color(0xFF2D2D44),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      title: const Text(
+        'Patient’s Card/Control Number',
+        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      ),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        keyboardType: TextInputType.number,
+        inputFormatters: [
+          FilteringTextInputFormatter.digitsOnly,
+          LengthLimitingTextInputFormatter(15),
+        ],
+        textInputAction: TextInputAction.done,
+        onSubmitted: (_) => _submit(),
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 20,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 1.2,
+        ),
+        cursorColor: const Color(0xFF8F6BFF),
+        decoration: InputDecoration(
+          hintText: 'Numbers only',
+          hintStyle: const TextStyle(color: Colors.white38),
+          filled: true,
+          fillColor: Colors.white10,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide.none,
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: const Color(0xFF8F6BFF),
+          ),
+          onPressed: canSubmit ? _submit : null,
+          child: const Text('Save'),
         ),
       ],
     );
@@ -2575,7 +2718,14 @@ class _LockOverlayPainter extends CustomPainter {
   /// glyph sits exactly where the number is drawn.
   final bool showGlyph;
 
-  const _LockOverlayPainter(this.normalizedRects, {this.showGlyph = true});
+  /// Shown in place of the lock glyph on fields the user fills in by tapping.
+  final String? hint;
+
+  const _LockOverlayPainter(
+    this.normalizedRects, {
+    this.showGlyph = true,
+    this.hint,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -2597,18 +2747,36 @@ class _LockOverlayPainter extends CustomPainter {
       canvas.drawRRect(rrect, border);
 
       if (!showGlyph) continue;
-      // Tiny lock glyph in the top-left corner of the region.
+      // Tiny lock glyph (or the tap hint) in the top-left corner of the region.
       final tp = TextPainter(
-        text: const TextSpan(text: '\u{1F512}', style: TextStyle(fontSize: 11)),
+        text: hint != null
+            ? TextSpan(
+                text: '✎ $hint',
+                style: const TextStyle(
+                  fontSize: 10,
+                  color: Color(0xFF5D4B8A),
+                  fontWeight: FontWeight.w600,
+                ),
+              )
+            : const TextSpan(text: '\u{1F512}', style: TextStyle(fontSize: 11)),
         textDirection: TextDirection.ltr,
       )..layout();
       if (rect.width > tp.width + 6 && rect.height > tp.height) {
-        tp.paint(canvas, rect.topLeft + const Offset(3, 1));
+        // The hint goes right-aligned, over the blank underline rather than
+        // the printed label at the left of the field.
+        tp.paint(
+          canvas,
+          hint != null
+              ? rect.topRight + Offset(-tp.width - 4, 1)
+              : rect.topLeft + const Offset(3, 1),
+        );
       }
     }
   }
 
   @override
   bool shouldRepaint(_LockOverlayPainter old) =>
-      old.normalizedRects != normalizedRects;
+      old.normalizedRects != normalizedRects ||
+      old.showGlyph != showGlyph ||
+      old.hint != hint;
 }
