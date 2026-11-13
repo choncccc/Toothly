@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import 'package:mime/mime.dart';
@@ -12,6 +13,7 @@ import '../services/local/profile_store.dart';
 import '../viewmodel/home_viewmodel.dart';
 import '../widgets/animations.dart';
 import 'file_preview_view.dart';
+import 'photo_review_view.dart';
 
 class ClinicalCasesView extends StatefulWidget {
   const ClinicalCasesView({super.key});
@@ -412,6 +414,88 @@ class _ChecklistTileState extends State<_ChecklistTile> {
     }
   }
 
+  /// Lets the user choose between taking a photo and picking a file.
+  Future<void> _chooseAttachSource() async {
+    final source = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera_rounded,
+                  color: Color(0xFF5D4B8A)),
+              title: const Text('Take photo'),
+              onTap: () => Navigator.pop(ctx, 'camera'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.folder_open_rounded,
+                  color: Color(0xFF5D4B8A)),
+              title: const Text('Choose file'),
+              onTap: () => Navigator.pop(ctx, 'file'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (source == 'camera') {
+      await _takePhotoAndUpload();
+    } else if (source == 'file') {
+      await _pickAndUpload();
+    }
+  }
+
+  /// Opens the camera, shows the shot for review, and repeats on "Retake".
+  /// Only the photo the user finally accepts is attached; rejected shots are
+  /// deleted.
+  Future<void> _takePhotoAndUpload() async {
+    final picker = ImagePicker();
+    while (mounted) {
+      final XFile? shot;
+      try {
+        shot = await picker.pickImage(
+          source: ImageSource.camera,
+          imageQuality: 85,
+        );
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not open camera: $e')),
+          );
+        }
+        return;
+      }
+      if (shot == null || !mounted) return; // camera closed without a photo
+      final file = File(shot.path);
+      final choice = await Navigator.of(context).push<PhotoReviewChoice>(
+        MaterialPageRoute(builder: (_) => PhotoReviewView(photo: file)),
+      );
+      if (choice == PhotoReviewChoice.use) {
+        await _upload(file, _photoName());
+        _discard(file); // the store keeps its own copy
+        return;
+      }
+      _discard(file);
+      if (choice != PhotoReviewChoice.retake) return; // backed out
+    }
+  }
+
+  void _discard(File f) {
+    f.delete().catchError((_) => f);
+  }
+
+  /// e.g. Photo_20261113_142530.jpg
+  String _photoName() {
+    final n = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    return 'Photo_${n.year}${two(n.month)}${two(n.day)}_'
+        '${two(n.hour)}${two(n.minute)}${two(n.second)}.jpg';
+  }
+
   Future<void> _pickAndUpload() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.any,
@@ -421,14 +505,17 @@ class _ChecklistTileState extends State<_ChecklistTile> {
     final picked = result.files.single;
     final path = picked.path;
     if (path == null) return;
+    await _upload(File(path), picked.name);
+  }
 
+  Future<void> _upload(File source, String displayName) async {
     if (mounted) setState(() => _saving = true);
     try {
       await widget.store.addUpload(
         level: widget.level,
         itemKey: widget.item.key,
-        sourceFile: File(path),
-        displayName: picked.name,
+        sourceFile: source,
+        displayName: displayName,
       );
       // Attaching the first file auto-checks the item and adds to progress.
       if (!_checked) {
@@ -559,7 +646,7 @@ class _ChecklistTileState extends State<_ChecklistTile> {
               ),
               IconButton(
                 tooltip: 'Attach file',
-                onPressed: _saving ? null : _pickAndUpload,
+                onPressed: _saving ? null : _chooseAttachSource,
                 icon: const Icon(Icons.attach_file,
                     color: Color(0xFF5D4B8A)),
               ),
