@@ -60,50 +60,48 @@ List<Rect> lockedRegionsForPage(String assetPath, int page) {
   return r == null ? const [] : [r];
 }
 
-/// Where the issued card/control number is written on a form's first page: the
-/// blank underline after the "Patient's Card/Control Number:" label. `left` and
-/// `right` are the ends of the underline and `bottom` is its height on the page,
-/// so the number sits on the line rather than over the label. `top` is
-/// nominal. Measured from each PDF's drawn underline.
-///
-/// Forms missing here fall back to writing inside the locked rect.
+/// Where the card/control number is written on a form's first page: the blank
+/// underline after the "Patient's Card/Control Number:" label. `left` and
+/// `right` are the ends of the underline, `bottom` is the underline (which is
+/// also the label's baseline) and `top` is the label's cap top, so the field's
+/// height gives the label's own text size. Measured from each PDF.
 const Map<String, Rect> _kControlNumberFields = {
   r'assets/NEW CHARTING 2026/ENDODONTICS/ENDODONTICS PX CHART/Endodontic-form.pdf':
-      Rect.fromLTRB(0.4164, 0.1613, 0.7258, 0.1813),
+      Rect.fromLTRB(0.4164, 0.1712, 0.7258, 0.1817),
   r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-III-LIVE-PX.pdf':
-      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+      Rect.fromLTRB(0.3573, 0.1892, 0.5884, 0.2007),
   r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-II-LIVE-PX.pdf':
-      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+      Rect.fromLTRB(0.3573, 0.1892, 0.5884, 0.2007),
   r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-I-LIVE-PX.pdf':
-      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+      Rect.fromLTRB(0.3573, 0.1892, 0.5884, 0.2007),
   r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-IV-LIVE-PX.pdf':
-      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+      Rect.fromLTRB(0.3573, 0.1892, 0.5884, 0.2007),
   r'assets/NEW CHARTING 2026/OPERATIVE DENTISTRY/RESTO PX CHART/CLASS-V-LIVE-PX.pdf':
-      Rect.fromLTRB(0.3573, 0.1803, 0.5884, 0.2003),
+      Rect.fromLTRB(0.3573, 0.1892, 0.5884, 0.2007),
   r'assets/NEW CHARTING 2026/ORAL SURGERY/Exodontia-patient-form.pdf':
-      Rect.fromLTRB(0.4164, 0.1847, 0.6474, 0.2047),
+      Rect.fromLTRB(0.4164, 0.1945, 0.6474, 0.2050),
   r'assets/NEW CHARTING 2026/PEDIATRIC/ART PEDIA.pdf':
-      Rect.fromLTRB(0.3641, 0.2264, 0.6040, 0.2464),
+      Rect.fromLTRB(0.3641, 0.2337, 0.6040, 0.2464),
   r'assets/NEW CHARTING 2026/PEDIATRIC/FLUORIDE APPLICATION PEDIA.pdf':
-      Rect.fromLTRB(0.4722, 0.1878, 0.7059, 0.2078),
+      Rect.fromLTRB(0.4722, 0.1973, 0.7059, 0.2078),
   r'assets/NEW CHARTING 2026/PEDIATRIC/PFS PEDIA.pdf':
-      Rect.fromLTRB(0.3641, 0.2276, 0.6040, 0.2476),
+      Rect.fromLTRB(0.3641, 0.2348, 0.6040, 0.2476),
   r'assets/NEW CHARTING 2026/PEDIATRIC/PRR PEDIA.pdf':
-      Rect.fromLTRB(0.3546, 0.2017, 0.5882, 0.2217),
+      Rect.fromLTRB(0.3546, 0.2102, 0.5882, 0.2217),
   r'assets/NEW CHARTING 2026/PEDIATRIC/PULP THERAPHY PEDIA.pdf':
-      Rect.fromLTRB(0.4134, 0.2243, 0.7255, 0.2443),
+      Rect.fromLTRB(0.4134, 0.2313, 0.7255, 0.2443),
   r'assets/NEW CHARTING 2026/PEDIATRIC/SPACE MAINTAINER PEDIA.pdf':
-      Rect.fromLTRB(0.4722, 0.1793, 0.7843, 0.1993),
+      Rect.fromLTRB(0.4722, 0.1887, 0.7843, 0.1993),
   r'assets/NEW CHARTING 2026/PERIODONTICS/Oral-Prophylaxis-form-PX.pdf':
-      Rect.fromLTRB(0.4753, 0.1729, 0.7062, 0.1929),
+      Rect.fromLTRB(0.4753, 0.1819, 0.7062, 0.1933),
   r'assets/NEW CHARTING 2026/PERIODONTICS/PERIO CHART.pdf':
-      Rect.fromLTRB(0.4722, 0.1536, 0.7059, 0.1736),
+      Rect.fromLTRB(0.4722, 0.1626, 0.7059, 0.1736),
   r'assets/NEW CHARTING 2026/PROSTHODONTICS/COMPLETE DENTURE/CD PX CHART/CD-patient-form.pdf':
-      Rect.fromLTRB(0.4164, 0.1628, 0.6474, 0.1828),
+      Rect.fromLTRB(0.4164, 0.1727, 0.6474, 0.1832),
   r'assets/NEW CHARTING 2026/PROSTHODONTICS/FIXED PARTIAL DENTURE/FPD PX CHART/Fixed-restoration-patient-1.pdf':
-      Rect.fromLTRB(0.3915, 0.2261, 0.6514, 0.2461),
+      Rect.fromLTRB(0.3915, 0.2367, 0.6514, 0.2465),
   r'assets/NEW CHARTING 2026/PROSTHODONTICS/REMOVABLE PARTIAL DENTURE/RPD PX CHART/RPD-patient-form.pdf':
-      Rect.fromLTRB(0.3915, 0.1618, 0.6425, 0.1818),
+      Rect.fromLTRB(0.3915, 0.1724, 0.6425, 0.1822),
 };
 
 /// Normalised underline field for the control number on [assetPath]'s [page],
@@ -113,13 +111,8 @@ Rect? controlNumberFieldForPage(String assetPath, int page) {
   return _kControlNumberFields[assetPath];
 }
 
-/// Forms whose control number is typed in by the user (digits only) instead of
-/// being issued by the app. The field stays locked against ink and text, but
-/// tapping it opens a number prompt.
-const Set<String> _kManualControlNumberForms = {
-  r'assets/NEW CHARTING 2026/ORAL SURGERY/Exodontia-patient-form.pdf',
-};
-
-/// Whether [assetPath]'s control number is entered by hand.
+/// Whether [assetPath]'s control number is entered by hand. Every form that has
+/// a "Patient's Card/Control Number" line is; forms without one (the
+/// simulation charts) keep an app-issued code to identify the record.
 bool controlNumberIsManual(String assetPath) =>
-    _kManualControlNumberForms.contains(assetPath);
+    _kControlNumberFields.containsKey(assetPath);

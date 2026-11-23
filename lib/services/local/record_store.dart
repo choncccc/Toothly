@@ -223,10 +223,10 @@ class RecordStore {
     'Periodontics': 'PERIO',
   };
 
-  /// Assigns the next patient card/control number for [category], e.g.
-  /// PED-2026-003. The chart's own control-number field is a locked region the
-  /// student cannot write in (see `pdf_locked_regions.dart`) because the code is
-  /// issued here rather than typed by hand.
+  /// Assigns the next app-issued code for [category], e.g. PED-2026-003. Used
+  /// for forms without a patient card/control number line (the simulation
+  /// charts) and for imported records; forms that have the line take a number
+  /// typed by the user instead (see `pdf_locked_regions.dart`).
   Future<String> nextPatientCode(String category) async =>
       _nextPatientCode(await _database, category);
 

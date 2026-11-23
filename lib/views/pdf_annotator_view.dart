@@ -245,14 +245,18 @@ class _PdfAnnotatorViewState extends State<PdfAnnotatorView> {
     _loadDocument();
   }
 
-  /// True for forms (Exodontia) whose control number the user types in.
+  /// True for forms with a patient card/control number line, which the user
+  /// types in; other forms get an app-issued code.
   bool get _manualCode => controlNumberIsManual(widget.editablePdfPath);
 
   /// Asks for the hand-entered control number (digits only) and rejects one
   /// already used by another record in this department. Returns false when the
   /// user cancels.
   Future<bool> _promptControlNumber() async {
-    var initial = _patientCode ?? '';
+    // An older app-issued code (e.g. PED-2026-003) is not digits-only, so
+    // start blank rather than let the digit filter mangle it.
+    final current = _patientCode ?? '';
+    var initial = RegExp(r'^\d+$').hasMatch(current) ? current : '';
     while (mounted) {
       final entered = await showDialog<String>(
         context: context,
@@ -2667,13 +2671,18 @@ class _ControlNumberPainter extends CustomPainter {
       }
       final f = field;
       if (f != null) {
-        // Sit the text's baseline just above the underline, starting a little
-        // after the label's colon, and shrink further if the line is short.
+        // The field runs from the top of the label's text down to the
+        // underline, so its height is ~0.89 of the label's point size. The
+        // app font's capitals are ~10% taller than the forms' Calibri, so a
+        // size equal to the field height makes the digits stand as tall as
+        // the label's capitals.
         final left = f.left * size.width;
         final right = f.right * size.width;
         final lineY = f.bottom * size.height;
-        while (painter.width > right - left - 6 && fontSize > 6) {
-          fontSize -= 0.5;
+        final fieldHeight = (f.bottom - f.top) * size.height;
+        fontSize = fieldHeight;
+        final gap = fontSize * 0.3;
+        while (true) {
           painter = TextPainter(
             text: TextSpan(
               text: code,
@@ -2683,12 +2692,16 @@ class _ControlNumberPainter extends CustomPainter {
             ),
             textDirection: TextDirection.ltr,
           )..layout();
+          if (painter.width <= right - left - 2 * gap || fontSize <= 6) break;
+          fontSize -= 0.5;
         }
+        // The underline is drawn just under the label's baseline; lift the
+        // number by the same amount so both share one baseline.
         final baseline =
             painter.computeDistanceToActualBaseline(TextBaseline.alphabetic);
         painter.paint(
           canvas,
-          Offset(left + 4, lineY - baseline - fontSize * 0.12),
+          Offset(left + gap, lineY - baseline - fontSize * 0.13),
         );
         continue;
       }
